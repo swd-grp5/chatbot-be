@@ -22,7 +22,7 @@ public class DefaultUserInitializer implements CommandLineRunner {
     public void run(String... args) {
         seedUser("Student", "student@gmail.com", UserRole.STUDENT);
         seedUser("Admin", "admin@gmail.com", UserRole.ADMIN);
-        seedUser("Lecturer", "lecture@gmail.com", UserRole.LECTURER);
+        seedUser("Lecturer", "lecturer@gmail.com", UserRole.LECTURER);
     }
 
     private void seedUser(String fullName, String email, UserRole role) {
