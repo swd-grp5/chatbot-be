@@ -12,6 +12,7 @@ import swdchatbox.system.auth.dto.request.LoginRequest;
 import swdchatbox.system.auth.dto.request.GoogleLoginRequest;
 import swdchatbox.system.auth.dto.request.RegisterRequest;
 import swdchatbox.system.auth.dto.response.AuthResponse;
+import swdchatbox.system.common.exception.AuthException;
 import swdchatbox.system.user.dto.response.UserResponse;
 import swdchatbox.system.user.entity.User;
 import swdchatbox.system.user.enums.AuthProvider;
@@ -35,7 +36,7 @@ public class AuthService {
 
     public AuthResponse register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
-            throw new RuntimeException("Email already exists");
+            throw new AuthException("Email already exists");
         }
 
         User user = User.builder()
@@ -60,18 +61,18 @@ public class AuthService {
 
     public AuthResponse login(LoginRequest request) {
         User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new RuntimeException("Invalid email or password"));
+                .orElseThrow(() -> new AuthException("Invalid email or password"));
 
         if (user.getProvider() != null && user.getProvider() != AuthProvider.LOCAL) {
-            throw new RuntimeException("Tài khoản này đăng nhập bằng Google. Vui lòng dùng Google login.");
+            throw new AuthException("Tài khoản này đăng nhập bằng Google. Vui lòng dùng Google login.");
         }
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            throw new RuntimeException("Invalid email or password");
+            throw new AuthException("Invalid email or password");
         }
 
         if (!user.getIsActive()) {
-            throw new RuntimeException("Tài khoản chưa được kích hoạt. Vui lòng xác minh email.");
+            throw new AuthException("Tài khoản chưa được kích hoạt. Vui lòng xác minh email.");
         }
 
         String token = jwtService.generateToken(user, request.getRememberMe());
@@ -84,7 +85,7 @@ public class AuthService {
 
     public AuthResponse loginWithGoogle(GoogleLoginRequest request) {
         if (googleClientId == null || googleClientId.isBlank()) {
-            throw new RuntimeException("Google client id is not configured");
+            throw new AuthException("Google client id is not configured");
         }
 
         GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(
@@ -96,7 +97,7 @@ public class AuthService {
         try {
             idToken = verifier.verify(request.getIdToken());
         } catch (Exception e) {
-            throw new RuntimeException("Invalid Google token");
+            throw new AuthException("Invalid Google token");
         }
 
         if (idToken == null) {
