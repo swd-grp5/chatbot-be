@@ -36,7 +36,11 @@ public class AuthService {
 
     public AuthResponse register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
-            throw new AuthException("Email already exists");
+            throw new AuthException("This email is already registered");
+        }
+
+        if (!request.getPassword().equals(request.getConfirmPassword())) {
+            throw new AuthException("Passwords do not match");
         }
 
         User user = User.builder()
@@ -61,18 +65,18 @@ public class AuthService {
 
     public AuthResponse login(LoginRequest request) {
         User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new AuthException("Invalid email or password"));
+                .orElseThrow(() -> new AuthException("This email is not registered"));
 
         if (user.getProvider() != null && user.getProvider() != AuthProvider.LOCAL) {
-            throw new AuthException("Tài khoản này đăng nhập bằng Google. Vui lòng dùng Google login.");
+            throw new AuthException("This account uses Google sign-in. Please use Google login.");
         }
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            throw new AuthException("Invalid email or password");
+            throw new AuthException("Incorrect password");
         }
 
         if (!user.getIsActive()) {
-            throw new AuthException("Tài khoản chưa được kích hoạt. Vui lòng xác minh email.");
+            throw new AuthException("Your account is not activated yet. Please verify your email.");
         }
 
         String token = jwtService.generateToken(user, request.getRememberMe());
@@ -85,7 +89,7 @@ public class AuthService {
 
     public AuthResponse loginWithGoogle(GoogleLoginRequest request) {
         if (googleClientId == null || googleClientId.isBlank()) {
-            throw new AuthException("Google client id is not configured");
+            throw new AuthException("Google client ID is not configured");
         }
 
         GoogleIdTokenVerifier verifier = new GoogleIdTokenVerifier.Builder(
