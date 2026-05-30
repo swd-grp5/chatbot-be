@@ -1,5 +1,0 @@
-app:
-  storage:
-    documents:
-      base-path: uploads/documents
-      checksum-algorithm: SHA-256
