@@ -1,4 +1,4 @@
-package swdchatbox.system.document.entity;
+package swdchatbox.system.subject.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
