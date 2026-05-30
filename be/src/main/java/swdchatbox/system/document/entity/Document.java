@@ -6,6 +6,7 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 import swdchatbox.system.document.enums.DocumentStatus;
 import swdchatbox.system.document.enums.DocumentType;
+import swdchatbox.system.subject.entity.Subject;
 import swdchatbox.system.user.entity.User;
 
 import java.time.LocalDateTime;

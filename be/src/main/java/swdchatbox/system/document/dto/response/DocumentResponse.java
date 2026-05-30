@@ -1,5 +1,6 @@
 package swdchatbox.system.document.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import lombok.Builder;
 import lombok.Getter;
 import swdchatbox.system.document.entity.Document;
@@ -12,6 +13,7 @@ import java.util.UUID;
 
 @Getter
 @Builder
+@JsonPropertyOrder({"id", "subjectId", "subjectCode", "subjectName", "title", "description", "documentType", "status", "totalPages", "totalChunks", "extractedText", "active", "createdAt", "updatedAt", "files"})
 public class DocumentResponse {
     private UUID id;
     private UUID subjectId;
