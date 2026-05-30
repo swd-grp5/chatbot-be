@@ -82,7 +82,7 @@ public class AuthController {
     public ResponseEntity<UserResponse> me(Authentication authentication) {
         String email = authentication.getName();
         User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new swdchatbox.system.common.exception.AuthException("User not found"));
         return ResponseEntity.ok(authService.toUserResponse(user));
     }
 
@@ -92,7 +92,7 @@ public class AuthController {
             @Valid @RequestBody UpdateRoleRequest request
     ) {
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new swdchatbox.system.common.exception.AuthException("User not found"));
         user.setRole(request.getRole());
         userRepository.save(user);
         return ResponseEntity.ok().build();
