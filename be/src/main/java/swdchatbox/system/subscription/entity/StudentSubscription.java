@@ -4,7 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
-import swdchatbox.system.document.entity.Subject;
+import swdchatbox.system.subject.entity.Subject;
 import swdchatbox.system.user.entity.User;
 
 import java.time.LocalDateTime;
