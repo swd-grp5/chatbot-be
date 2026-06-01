@@ -22,7 +22,6 @@ public final class DocumentMapper {
                 .status(document.getStatus())
                 .totalPages(document.getTotalPages())
                 .totalChunks(document.getTotalChunks())
-                .extractedText(document.getExtractedText())
                 .active(document.getActive())
                 .createdAt(document.getCreatedAt())
                 .updatedAt(document.getUpdatedAt())

@@ -1,5 +1,7 @@
 package swdchatbox.system.document.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -40,41 +42,47 @@ public class DocumentController {
     private final DocumentIndexingService documentIndexingService;
     private final DocumentFileRepository documentFileRepository;
 
+    @Operation(summary = "Upload tài liệu", description = "FE gửi file dạng `multipart/form-data` ở field `files`. Dùng để tạo document mới.")
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<DocumentResponse> upload(
+            @Parameter(description = "Danh sách file upload")
             @RequestPart(value = "files", required = false) List<MultipartFile> files
     ) {
         return ResponseEntity.ok(documentService.upload(new DocumentUploadRequest(), files));
     }
 
+    @Operation(summary = "Thống kê tài liệu", description = "FE dùng để hiển thị số liệu dashboard như tổng document, ready, processing, failed.")
     @GetMapping("/stats")
     public ResponseEntity<DocumentDashboardStatsResponse> stats() {
         return ResponseEntity.ok(documentService.getStats());
     }
 
+    @Operation(summary = "Lấy trạng thái index", description = "FE dùng để kiểm tra document đã được index hay chưa trước khi hiển thị nội dung search/chunk.")
     @GetMapping("/{id}/index-status")
     public ResponseEntity<DocumentIndexStatusResponse> indexStatus(@PathVariable UUID id) {
         return ResponseEntity.ok(documentService.getIndexStatus(id));
     }
 
+    @Operation(summary = "Lấy danh sách chunks", description = "FE dùng để xem các đoạn nội dung đã index của document.")
     @GetMapping("/{id}/chunks")
     public ResponseEntity<List<DocumentChunkResponse>> chunks(@PathVariable UUID id) {
         return ResponseEntity.ok(documentIndexingService.getChunks(id).stream().map(swdchatbox.system.document.mapper.DocumentChunkMapper::toResponse).toList());
     }
 
+    @Operation(summary = "Lấy danh sách tài liệu", description = "FE dùng để render bảng document. Hỗ trợ filter theo subject, loại tài liệu, trạng thái, active, keyword, khoảng thời gian và phân trang.")
     @GetMapping
     public ResponseEntity<PageResponse<DocumentResponse>> getAll(
-            @RequestParam(required = false) UUID subjectId,
-            @RequestParam(required = false) DocumentType documentType,
-            @RequestParam(required = false) swdchatbox.system.document.enums.DocumentStatus status,
-            @RequestParam(required = false) Boolean active,
-            @RequestParam(required = false) String keyword,
-            @RequestParam(required = false) String createdFrom,
-            @RequestParam(required = false) String createdTo,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size,
-            @RequestParam(required = false) String sortBy,
-            @RequestParam(required = false) String sortDir
+            @Parameter(description = "Lọc theo subjectId") @RequestParam(required = false) UUID subjectId,
+            @Parameter(description = "Lọc theo loại tài liệu") @RequestParam(required = false) DocumentType documentType,
+            @Parameter(description = "Lọc theo trạng thái index") @RequestParam(required = false) swdchatbox.system.document.enums.DocumentStatus status,
+            @Parameter(description = "Lọc theo trạng thái active") @RequestParam(required = false) Boolean active,
+            @Parameter(description = "Từ khóa tìm kiếm") @RequestParam(required = false) String keyword,
+            @Parameter(description = "Ngày tạo từ (ISO-8601)") @RequestParam(required = false) String createdFrom,
+            @Parameter(description = "Ngày tạo đến (ISO-8601)") @RequestParam(required = false) String createdTo,
+            @Parameter(description = "Số trang, bắt đầu từ 0") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Số phần tử trên mỗi trang") @RequestParam(defaultValue = "20") int size,
+            @Parameter(description = "Trường sắp xếp: title, status, documentType, createdAt, updatedAt") @RequestParam(required = false) String sortBy,
+            @Parameter(description = "Hướng sắp xếp: asc hoặc desc") @RequestParam(required = false) String sortDir
     ) {
         DocumentFilterRequest filter = new DocumentFilterRequest();
         filter.setSubjectId(subjectId);
@@ -89,11 +97,13 @@ public class DocumentController {
         return ResponseEntity.ok(documentService.findAll(filter, pageable));
     }
 
+    @Operation(summary = "Lấy chi tiết tài liệu", description = "FE dùng khi mở trang chi tiết document hoặc đổ dữ liệu vào form chỉnh sửa.")
     @GetMapping("/{id}")
     public ResponseEntity<DocumentResponse> getById(@PathVariable UUID id) {
         return ResponseEntity.ok(documentService.findById(id));
     }
 
+    @Operation(summary = "Tải xuống file gốc của tài liệu", description = "FE dùng để tải file đầu tiên/gốc của document. Response trả về binary file.")
     @GetMapping("/{id}/download")
     public ResponseEntity<byte[]> downloadDocument(@PathVariable UUID id) throws Exception {
         DocumentFile file = documentFileRepository.findAllByDocument_Id(id).stream().findFirst()
@@ -105,6 +115,7 @@ public class DocumentController {
                 .body(content);
     }
 
+    @Operation(summary = "Tải xuống file theo fileId", description = "FE dùng khi document có nhiều file và muốn tải đúng file con theo `documentId` + `fileId`.")
     @GetMapping("/{documentId}/files/{fileId}/download")
     public ResponseEntity<byte[]> downloadFile(@PathVariable UUID documentId, @PathVariable UUID fileId) throws Exception {
         DocumentFile file = documentFileRepository.findById(fileId)
@@ -117,33 +128,38 @@ public class DocumentController {
                 .body(content);
     }
 
+    @Operation(summary = "Index lại tài liệu", description = "FE dùng khi cần reprocess/reindex document sau upload hoặc sau khi cập nhật file.")
     @PostMapping("/{id}/reindex")
     public ResponseEntity<DocumentResponse> reindex(@PathVariable UUID id) {
         return ResponseEntity.ok(documentService.reindex(id));
     }
 
+    @Operation(summary = "Bật/tắt tài liệu", description = "FE dùng để đổi nhanh trạng thái active của document.")
     @PatchMapping("/{id}/toggle-active")
     public ResponseEntity<DocumentResponse> toggleActive(@PathVariable UUID id) {
         return ResponseEntity.ok(documentService.toggleActive(id));
     }
 
+    @Operation(summary = "Cập nhật tài liệu", description = "FE gửi dữ liệu cập nhật ở field `data` và file mới ở field `files` nếu có. Request là multipart/form-data.")
     @PutMapping(value = "/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<DocumentResponse> update(
             @PathVariable UUID id,
             @Valid @RequestPart("data") DocumentUpdateRequest request,
-            @RequestPart(value = "files", required = false) List<MultipartFile> files
+            @Parameter(description = "Danh sách file mới") @RequestPart(value = "files", required = false) List<MultipartFile> files
     ) {
         return ResponseEntity.ok(documentService.update(id, request, files));
     }
 
+    @Operation(summary = "Thêm file vào tài liệu", description = "FE dùng khi document đã có sẵn và muốn upload thêm file con. Gửi multipart/form-data ở field `files`.")
     @PostMapping(value = "/{id}/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<DocumentResponse> addFiles(
             @PathVariable UUID id,
-            @RequestPart("files") List<MultipartFile> files
+            @Parameter(description = "Danh sách file cần thêm") @RequestPart("files") List<MultipartFile> files
     ) {
         return ResponseEntity.ok(documentService.addFiles(id, files));
     }
 
+    @Operation(summary = "Xóa tài liệu", description = "FE dùng để xóa document theo id. Sau khi xóa sẽ trả về HTTP 204.")
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable UUID id) {
         documentService.delete(id);
