@@ -1,0 +1,18 @@
+package swdchatbox.system.chat.repository;
+
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.JpaRepository;
+import swdchatbox.system.chat.entity.ChatConversation;
+
+import java.util.Optional;
+import java.util.UUID;
+
+public interface ChatConversationRepository extends JpaRepository<ChatConversation, UUID> {
+
+    Page<ChatConversation> findAllByUser_IdAndActiveTrueOrderByUpdatedAtDesc(UUID userId, Pageable pageable);
+
+    Optional<ChatConversation> findByIdAndUser_Id(UUID id, UUID userId);
+
+    long countByUser_Id(UUID userId);
+}
