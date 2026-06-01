@@ -5,7 +5,15 @@ import io.swagger.v3.oas.annotations.info.Info;
 import io.swagger.v3.oas.annotations.security.SecurityScheme;
 import io.swagger.v3.oas.annotations.enums.SecuritySchemeType;
 import io.swagger.v3.oas.annotations.enums.SecuritySchemeIn;
+import io.swagger.v3.oas.models.servers.Server;
+import org.springdoc.core.customizers.OpenApiCustomizer;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 
+import java.util.List;
+
+@Configuration
 @OpenAPIDefinition(
         info = @Info(
                 title = "SWDChatBox API",
@@ -20,5 +28,14 @@ import io.swagger.v3.oas.annotations.enums.SecuritySchemeIn;
         in = SecuritySchemeIn.HEADER
 )
 public class OpenApiConfig {
+
+    @Bean
+    public OpenApiCustomizer openApiServerCustomizer(
+            @Value("${app.public-url}") String publicUrl
+    ) {
+        return openApi -> openApi.setServers(List.of(
+                new Server().url(publicUrl).description("Current environment")
+        ));
+    }
 }
 
