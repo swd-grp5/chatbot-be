@@ -1,5 +1,6 @@
 package swdchatbox.system.document.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import lombok.Builder;
 import lombok.Getter;
 import swdchatbox.system.document.entity.DocumentFile;
@@ -9,6 +10,7 @@ import java.util.UUID;
 
 @Getter
 @Builder
+@JsonPropertyOrder({"id", "originalFileName", "storedFileName", "filePath", "mimeType", "fileSize", "checksum", "createdAt"})
 public class DocumentFileResponse {
     private UUID id;
     private String originalFileName;
