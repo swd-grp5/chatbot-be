@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @Configuration
@@ -31,11 +32,19 @@ public class OpenApiConfig {
 
     @Bean
     public OpenApiCustomizer openApiServerCustomizer(
-            @Value("${app.public-url}") String publicUrl
+            @Value("${app.public-url:}") String publicUrl
     ) {
-        return openApi -> openApi.setServers(List.of(
-                new Server().url(publicUrl).description("Current environment")
-        ));
+        return openApi -> {
+            List<Server> servers = new ArrayList<>();
+
+            servers.add(new Server().url("http://localhost:8080").description("Local development"));
+
+            if (publicUrl != null && !publicUrl.isBlank()) {
+                servers.add(new Server().url(publicUrl).description("Current environment"));
+            }
+
+            openApi.setServers(servers);
+        };
     }
 }
 
