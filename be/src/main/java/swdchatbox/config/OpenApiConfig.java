@@ -5,8 +5,8 @@ import io.swagger.v3.oas.annotations.enums.SecuritySchemeIn;
 import io.swagger.v3.oas.annotations.enums.SecuritySchemeType;
 import io.swagger.v3.oas.annotations.info.Info;
 import io.swagger.v3.oas.annotations.security.SecurityScheme;
+import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.servers.Server;
-import org.springdoc.core.customizers.OpenApiCustomizer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -31,25 +31,23 @@ import java.util.List;
 public class OpenApiConfig {
 
     @Bean
-    public OpenApiCustomizer openApiServerCustomizer(
+    public OpenAPI customOpenAPI(
             @Value("${app.public-url:}") String publicUrl,
             @Value("${server.port:8080}") String serverPort
     ) {
-        return openApi -> {
-            List<Server> servers = new ArrayList<>();
+        List<Server> servers = new ArrayList<>();
 
-            String localUrl = "http://localhost:" + serverPort;
-            servers.add(new Server().url(localUrl).description("Local development"));
+        String localUrl = "http://localhost:" + serverPort;
+        servers.add(new Server().url(localUrl).description("Local development"));
 
-            if (publicUrl != null && !publicUrl.isBlank()) {
-                String deployedUrl = publicUrl.trim();
-                if (!localUrl.equalsIgnoreCase(deployedUrl)) {
-                    servers.add(new Server().url(deployedUrl).description("Deployed backend"));
-                }
+        if (publicUrl != null && !publicUrl.isBlank()) {
+            String deployedUrl = publicUrl.trim();
+            if (!localUrl.equalsIgnoreCase(deployedUrl)) {
+                servers.add(new Server().url(deployedUrl).description("Deployed backend"));
             }
+        }
 
-            openApi.setServers(servers);
-        };
+        return new OpenAPI().servers(servers);
     }
 }
 
