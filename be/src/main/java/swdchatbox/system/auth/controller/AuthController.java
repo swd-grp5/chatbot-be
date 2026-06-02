@@ -2,6 +2,8 @@ package swdchatbox.system.auth.controller;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -27,6 +29,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
+@SecurityRequirements
 public class AuthController {
 
     private final AuthService authService;
@@ -87,6 +90,7 @@ public class AuthController {
         return ResponseEntity.ok().build();
     }
 
+    @SecurityRequirement(name = "bearerAuth")
     @Operation(summary = "Lấy thông tin tài khoản hiện tại", description = "FE dùng API này để lấy profile của user đang đăng nhập. Cần gửi access token.")
     @GetMapping("/me")
     public ResponseEntity<UserResponse> me(Authentication authentication) {
@@ -96,7 +100,8 @@ public class AuthController {
         return ResponseEntity.ok(authService.toUserResponse(user));
     }
 
-    @Operation(summary = "Cập nhật role người dùng", description = "API nội bộ/admin dùng để đổi role cho một user theo `userId`.")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(summary = "Cập nhật role người dùng", description = "API nội bộ/admin dùng để đổi role cho một user theo `userId`. Cần quyền ADMIN.")
     @PutMapping("/role/{userId}")
     public ResponseEntity<?> updateRole(
             @PathVariable UUID userId,
