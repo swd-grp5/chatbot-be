@@ -1,10 +1,10 @@
 package swdchatbox.config;
 
 import io.swagger.v3.oas.annotations.OpenAPIDefinition;
+import io.swagger.v3.oas.annotations.enums.SecuritySchemeIn;
+import io.swagger.v3.oas.annotations.enums.SecuritySchemeType;
 import io.swagger.v3.oas.annotations.info.Info;
 import io.swagger.v3.oas.annotations.security.SecurityScheme;
-import io.swagger.v3.oas.annotations.enums.SecuritySchemeType;
-import io.swagger.v3.oas.annotations.enums.SecuritySchemeIn;
 import io.swagger.v3.oas.models.servers.Server;
 import org.springdoc.core.customizers.OpenApiCustomizer;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,15 +32,20 @@ public class OpenApiConfig {
 
     @Bean
     public OpenApiCustomizer openApiServerCustomizer(
-            @Value("${app.public-url:}") String publicUrl
+            @Value("${app.public-url:}") String publicUrl,
+            @Value("${server.port:8080}") String serverPort
     ) {
         return openApi -> {
             List<Server> servers = new ArrayList<>();
 
-            servers.add(new Server().url("http://localhost:8080").description("Local development"));
+            String localUrl = "http://localhost:" + serverPort;
+            servers.add(new Server().url(localUrl).description("Local development"));
 
             if (publicUrl != null && !publicUrl.isBlank()) {
-                servers.add(new Server().url(publicUrl).description("Current environment"));
+                String deployedUrl = publicUrl.trim();
+                if (!localUrl.equalsIgnoreCase(deployedUrl)) {
+                    servers.add(new Server().url(deployedUrl).description("Deployed backend"));
+                }
             }
 
             openApi.setServers(servers);
