@@ -39,14 +39,5 @@ public class UserController {
                 .build());
     }
 
-    @Operation(summary = "Lấy thông tin user hiện tại", description = "FE dùng khi cần lấy profile của người đang đăng nhập. Cần bearer token.")
-    @GetMapping("/me")
-    public ResponseEntity<UserResponse> getCurrentUser(Authentication authentication) {
-        String email = authentication.getName();
-
-        User user = userRepository.findByEmail(email)
-                .orElseThrow(() -> new swdchatbox.system.common.exception.AuthException("User not found"));
-
-        return ResponseEntity.ok(UserMapper.toResponse(user));
-    }
+  
 }
