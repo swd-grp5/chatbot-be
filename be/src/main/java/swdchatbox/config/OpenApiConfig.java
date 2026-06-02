@@ -32,7 +32,7 @@ public class OpenApiConfig {
 
     @Bean
     public OpenAPI customOpenAPI(
-            @Value("${app.public-url:}") String publicUrl,
+            @Value("${app.public-url:https://chat-bot-be-5ceqa.ondigitalocean.app}") String publicUrl,
             @Value("${server.port:8080}") String serverPort
     ) {
         List<Server> servers = new ArrayList<>();
