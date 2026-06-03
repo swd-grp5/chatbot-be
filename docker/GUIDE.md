@@ -63,6 +63,21 @@ MYSQL_ROOT_PASSWORD=your_root_password_here
 MYSQL_PORT=3307
 ```
 
+### Portainer / stack deploy (`/data/compose/...`)
+
+`docker-compose.yml` **không** dùng `env_file` — server thường không có file `.env`.
+
+Trong **Stack → Environment variables**, thêm tối thiểu:
+
+```env
+MYSQL_PASSWORD=your_password_here
+MYSQL_ROOT_PASSWORD=your_root_password_here
+```
+
+Tùy chọn (có default trong compose): `MYSQL_DATABASE`, `MYSQL_USER`, `MYSQL_PORT`.
+
+Rồi **Redeploy** stack. Lỗi `env file .../.env not found` là do bản compose cũ còn `env_file`.
+
 ---
 
 ## Chạy / dừng database
