@@ -68,9 +68,23 @@ APP_PUBLIC_URL=http://168.144.98.120:8080
 VERIFY_BASE_URL=http://168.144.98.120:8080
 ```
 
-Redeploy stack (build lại lần đầu hoặc khi đổi code).
+Redeploy stack (**bật build** — image không pull từ Docker Hub).
 
 Upload tài liệu lưu volume `be-uploads` → `/app/uploads` trong container.
+
+#### Lỗi `pull access denied for swdchatbox-be`
+
+Image `swdchatbox-be:latest` **chỉ tạo sau khi build** trên VPS, không public trên Hub.
+
+- Compose đã có `pull_policy: build` — update stack với YAML mới.
+- Portainer: deploy từ **Git/repo đủ thư mục `be/`** (có `Dockerfile`, `pom.xml`, `src/`).
+- Lần deploy: chọn **Build** / **Re-pull and redeploy** có build (Compose v2+).
+- Nếu vẫn pull fail: SSH vào VPS, trong thư mục repo chạy  
+  `docker compose build be && docker compose up -d`.
+
+#### Stack Git trên Portainer
+
+Web editor phải trỏ repo root `chatbot-be`, không chỉ paste mỗi file yaml.
 
 ---
 
@@ -85,6 +99,10 @@ docker compose up -d --build
 ---
 
 ## Troubleshooting
+
+### `pull access denied for swdchatbox-be`
+
+Không login Docker Hub được — bình thường vì image **chưa build**. Build trên server (xem mục Portainer trên), không `docker pull swdchatbox-be`.
 
 ### `Bind for 0.0.0.0:8080 failed: port is already allocated`
 

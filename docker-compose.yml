@@ -6,6 +6,8 @@ services:
       context: ./be
       dockerfile: Dockerfile
     image: swdchatbox-be:latest
+    # Image build local — không có trên Docker Hub; tránh Portainer "compose pull" fail
+    pull_policy: build
     container_name: swdchatbox-be
     restart: unless-stopped
     ports:
