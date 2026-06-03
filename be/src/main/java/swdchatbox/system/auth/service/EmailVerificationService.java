@@ -80,7 +80,7 @@ public class EmailVerificationService {
 
             mailSender.send(mimeMessage);
 
-            log.info("Verification email sent to {}", user.getEmail());
+            log.info("Verification email sent successfully to {}", user.getEmail());
 
         } catch (MailException e) {
             log.error("Mail sender error. From: {}, To: {}", from, user.getEmail(), e);

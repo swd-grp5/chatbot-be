@@ -6,6 +6,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -17,6 +18,7 @@ import swdchatbox.system.auth.dto.request.ResendVerificationRequest;
 import swdchatbox.system.auth.dto.request.ResetPasswordRequest;
 import swdchatbox.system.auth.dto.request.UpdateRoleRequest;
 import swdchatbox.system.auth.dto.response.AuthResponse;
+import swdchatbox.system.auth.dto.response.ResendVerificationResponse;
 import swdchatbox.system.auth.service.AuthService;
 import swdchatbox.system.auth.service.EmailVerificationService;
 import swdchatbox.system.auth.service.PasswordResetService;
@@ -26,6 +28,7 @@ import swdchatbox.system.user.repository.UserRepository;
 
 import java.util.UUID;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
@@ -70,9 +73,25 @@ public class AuthController {
 
     @Operation(summary = "Gửi lại email xác thực", description = "Dùng khi người dùng chưa nhận được email xác thực. FE gửi email theo `ResendVerificationRequest`.")
     @PostMapping("/resend-verification")
-    public ResponseEntity<?> resendVerification(@Valid @RequestBody ResendVerificationRequest request) {
-        emailVerificationService.resendVerificationEmail(request.getEmail());
-        return ResponseEntity.ok().build();
+    public ResponseEntity<ResendVerificationResponse> resendVerification(@Valid @RequestBody ResendVerificationRequest request) {
+        try {
+            emailVerificationService.resendVerificationEmail(request.getEmail());
+            log.info("Resend verification email succeeded for {}", request.getEmail());
+            return ResponseEntity.ok(
+                    ResendVerificationResponse.builder()
+                            .success(true)
+                            .message("Verification email has been sent successfully")
+                            .build()
+            );
+        } catch (RuntimeException e) {
+            log.error("Resend verification email failed for {}: {}", request.getEmail(), e.getMessage());
+            return ResponseEntity.status(400).body(
+                    ResendVerificationResponse.builder()
+                            .success(false)
+                            .message(e.getMessage())
+                            .build()
+            );
+        }
     }
 
 
