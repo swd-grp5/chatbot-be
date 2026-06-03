@@ -1,30 +1,49 @@
-name: swdchatbox
+name: swdchatbox-be
 
 services:
-  mysql:
-    image: mysql:8.4
-    container_name: swdchatbox
-
+  be:
+    build:
+      context: ./be
+      dockerfile: Dockerfile
+    image: swdchatbox-be:latest
+    container_name: swdchatbox-be
     restart: unless-stopped
-
-    environment:
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-swd_chatbox}
-      MYSQL_USER: ${MYSQL_USER:-swd_user}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in stack env}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in stack env}
-
     ports:
-      - "${MYSQL_PORT:-3306}:3306"
+      - "${SPRING_PORT:-8080}:8080"
+    environment:
+      # MySQL bên ngoài (VPS / stack DB riêng) — không chạy MySQL trong compose này
+      MYSQL_HOST: ${MYSQL_HOST:?Set MYSQL_HOST}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-swd_chatbox}
+      MYSQL_USE_SSL: ${MYSQL_USE_SSL:-false}
+      MYSQL_USER: ${MYSQL_USER:-swd_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}
+      SPRING_JPA_SHOW_SQL: ${SPRING_JPA_SHOW_SQL:-false}
 
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      JWT_EXPIRATION_MS: ${JWT_EXPIRATION_MS:-86400000}
+      JWT_SHORT_EXPIRATION_MS: ${JWT_SHORT_EXPIRATION_MS:-3600000}
+
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+
+      MAIL_HOST: ${MAIL_HOST:-}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      MAIL_FROM_NAME: ${MAIL_FROM_NAME:-SWDChatBox}
+      MAIL_REPLY_TO: ${MAIL_REPLY_TO:-}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:8080}
+      VERIFY_BASE_URL: ${VERIFY_BASE_URL:-http://localhost:8080}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+
+      MULTIPART_ENABLED: ${MULTIPART_ENABLED:-true}
+      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-200MB}
+      MAX_REQUEST_SIZE: ${MAX_REQUEST_SIZE:-250MB}
+      STORAGE_DOCUMENTS_BASE_PATH: ${STORAGE_DOCUMENTS_BASE_PATH:-uploads/documents}
+      STORAGE_DOCUMENTS_CHECKSUM_ALGORITHM: ${STORAGE_DOCUMENTS_CHECKSUM_ALGORITHM:-SHA-256}
     volumes:
-      - swdchatbox:/var/lib/mysql
-      - ./docker/mysql/init:/docker-entrypoint-initdb.d
-
-    command:
-      [
-        "--character-set-server=utf8mb4",
-        "--collation-server=utf8mb4_unicode_ci"
-      ]
+      - be-uploads:/app/uploads
 
 volumes:
-  swdchatbox:
+  be-uploads:
