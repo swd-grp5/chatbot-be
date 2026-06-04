@@ -1,12 +1,9 @@
 package swdchatbox.system.auth.service;
 
-import jakarta.mail.internet.MimeMessage;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.mail.MailException;
-import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import swdchatbox.system.auth.entity.EmailVerificationToken;
@@ -15,9 +12,14 @@ import swdchatbox.system.user.entity.User;
 import swdchatbox.system.user.enums.AuthProvider;
 import swdchatbox.system.user.repository.UserRepository;
 
-import java.nio.charset.StandardCharsets;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.LocalDateTime;
 import java.time.Year;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.UUID;
 
 @Slf4j
@@ -25,11 +27,15 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class EmailVerificationService {
 
+    private static final String RESEND_API_URL = "https://api.resend.com/emails";
+
     private final EmailVerificationTokenRepository tokenRepository;
     private final UserRepository userRepository;
-    private final JavaMailSender mailSender;
+    private final ObjectMapper objectMapper;
 
-    @Value("${app.mail.from}")
+    private final HttpClient httpClient = HttpClient.newHttpClient();
+
+    @Value("${app.mail.from:}")
     private String from;
 
     @Value("${app.mail.from-name:SWDChatBox}")
@@ -40,6 +46,9 @@ public class EmailVerificationService {
 
     @Value("${app.mail.verify-base-url:http://localhost:8080}")
     private String verifyBaseUrl;
+
+    @Value("${app.mail.resend.api-key:}")
+    private String resendApiKey;
 
     @Transactional
     public void sendVerificationEmail(User user) {
@@ -60,32 +69,8 @@ public class EmailVerificationService {
         String html = buildVerifyEmailHtml(user.getFullName(), verifyLink);
 
         try {
-            MimeMessage mimeMessage = mailSender.createMimeMessage();
-
-            MimeMessageHelper helper = new MimeMessageHelper(
-                    mimeMessage,
-                    MimeMessageHelper.MULTIPART_MODE_MIXED_RELATED,
-                    StandardCharsets.UTF_8.name()
-            );
-
-            helper.setTo(user.getEmail());
-            helper.setFrom(from, fromName);
-
-            if (replyTo != null && !replyTo.isBlank()) {
-                helper.setReplyTo(replyTo);
-            }
-
-            helper.setSubject(subject);
-            helper.setText(html, true);
-
-            mailSender.send(mimeMessage);
-
+            sendViaResend(user.getEmail(), subject, html);
             log.info("Verification email sent successfully to {}", user.getEmail());
-
-        } catch (MailException e) {
-            log.error("Mail sender error. From: {}, To: {}", from, user.getEmail(), e);
-            throw new RuntimeException("Failed to send verification email: " + e.getMessage(), e);
-
         } catch (Exception e) {
             log.error("Unexpected error when sending verification email. From: {}, To: {}", from, user.getEmail(), e);
             throw new RuntimeException("Failed to send verification email: " + e.getMessage(), e);
@@ -130,9 +115,49 @@ public class EmailVerificationService {
         sendVerificationEmail(user);
     }
 
+    private void sendViaResend(String to, String subject, String html) throws Exception {
+        if (resendApiKey == null || resendApiKey.isBlank()) {
+            throw new RuntimeException("Mail config error: app.mail.resend.api-key is empty. Check RESEND_API_KEY.");
+        }
+
+        if (from == null || from.isBlank()) {
+            throw new RuntimeException("Mail config error: app.mail.from is empty. Check MAIL_FROM.");
+        }
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("from", fromName + " <" + from + ">");
+        payload.put("to", new String[] { to });
+        payload.put("subject", subject);
+        payload.put("html", html);
+
+        if (replyTo != null && !replyTo.isBlank()) {
+            payload.put("reply_to", replyTo);
+        }
+
+        String requestBody = objectMapper.writeValueAsString(payload);
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(RESEND_API_URL))
+                .header("Authorization", "Bearer " + resendApiKey)
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new RuntimeException("Resend API error: HTTP " + response.statusCode() + " - " + response.body());
+        }
+    }
+
     private void validateMailConfig() {
         if (from == null || from.isBlank()) {
-            throw new RuntimeException("Mail config error: app.mail.from is empty. Check MAIL_FROM or MAIL_USERNAME.");
+            throw new RuntimeException("Mail config error: app.mail.from is empty. Check MAIL_FROM.");
+        }
+
+        if (resendApiKey == null || resendApiKey.isBlank()) {
+            throw new RuntimeException("Mail config error: app.mail.resend.api-key is empty. Check RESEND_API_KEY.");
         }
 
         if (fromName == null || fromName.isBlank()) {
