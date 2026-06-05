@@ -1,6 +1,7 @@
 package swdchatbox.system.common.exception;
 
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -15,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 @RestControllerAdvice
+@Slf4j
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -22,6 +24,14 @@ public class GlobalExceptionHandler {
             MethodArgumentNotValidException ex,
             HttpServletRequest request
     ) {
+        log.error(
+                "Validation error at path={} type={} message={}",
+                request.getRequestURI(),
+                ex.getClass().getName(),
+                ex.getMessage(),
+                ex
+        );
+
         Map<String, String> fieldErrors = new LinkedHashMap<>();
         for (FieldError fe : ex.getBindingResult().getFieldErrors()) {
             fieldErrors.put(fe.getField(), fe.getDefaultMessage());
@@ -44,6 +54,14 @@ public class GlobalExceptionHandler {
             BadRequestException ex,
             HttpServletRequest request
     ) {
+        log.error(
+                "Bad request at path={} type={} message={}",
+                request.getRequestURI(),
+                ex.getClass().getName(),
+                ex.getMessage(),
+                ex
+        );
+
         ApiErrorResponse body = ApiErrorResponse.builder()
                 .timestamp(Instant.now())
                 .status(HttpStatus.BAD_REQUEST.value())
@@ -60,6 +78,14 @@ public class GlobalExceptionHandler {
             AuthException ex,
             HttpServletRequest request
     ) {
+        log.error(
+                "Auth error at path={} type={} message={}",
+                request.getRequestURI(),
+                ex.getClass().getName(),
+                ex.getMessage(),
+                ex
+        );
+
         ApiErrorResponse body = ApiErrorResponse.builder()
                 .timestamp(Instant.now())
                 .status(HttpStatus.UNAUTHORIZED.value())
@@ -76,6 +102,14 @@ public class GlobalExceptionHandler {
             ResourceNotFoundException ex,
             HttpServletRequest request
     ) {
+        log.error(
+                "Resource not found at path={} type={} message={}",
+                request.getRequestURI(),
+                ex.getClass().getName(),
+                ex.getMessage(),
+                ex
+        );
+
         ApiErrorResponse body = ApiErrorResponse.builder()
                 .timestamp(Instant.now())
                 .status(HttpStatus.NOT_FOUND.value())
@@ -92,6 +126,14 @@ public class GlobalExceptionHandler {
             MaxUploadSizeExceededException ex,
             HttpServletRequest request
     ) {
+        log.error(
+                "Upload size exceeded at path={} type={} message={}",
+                request.getRequestURI(),
+                ex.getClass().getName(),
+                ex.getMessage(),
+                ex
+        );
+
         ApiErrorResponse body = ApiErrorResponse.builder()
                 .timestamp(Instant.now())
                 .status(HttpStatus.PAYLOAD_TOO_LARGE.value())

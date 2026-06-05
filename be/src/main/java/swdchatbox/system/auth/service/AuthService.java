@@ -1,15 +1,17 @@
 package swdchatbox.system.auth.service;
 
-import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.stereotype.Service;
 import com.google.api.client.googleapis.auth.oauth2.GoogleIdToken;
 import com.google.api.client.googleapis.auth.oauth2.GoogleIdTokenVerifier;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.gson.GsonFactory;
-import swdchatbox.system.auth.dto.request.LoginRequest;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import swdchatbox.security.JwtService;
 import swdchatbox.system.auth.dto.request.GoogleLoginRequest;
+import swdchatbox.system.auth.dto.request.LoginRequest;
 import swdchatbox.system.auth.dto.request.RegisterRequest;
 import swdchatbox.system.auth.dto.response.AuthResponse;
 import swdchatbox.system.common.exception.AuthException;
@@ -18,12 +20,12 @@ import swdchatbox.system.user.entity.User;
 import swdchatbox.system.user.enums.AuthProvider;
 import swdchatbox.system.user.enums.UserRole;
 import swdchatbox.system.user.repository.UserRepository;
-import swdchatbox.security.JwtService;
 
 import java.util.List;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class AuthService {
 
     private final UserRepository userRepository;
@@ -64,22 +66,31 @@ public class AuthService {
     }
 
     public AuthResponse login(LoginRequest request) {
+        log.info("Login attempt for email={}", request.getEmail());
+
         User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new AuthException("This email is not registered"));
+                .orElseThrow(() -> {
+                    log.warn("Login failed: email not registered email={}", request.getEmail());
+                    return new AuthException("This email is not registered");
+                });
 
         if (user.getProvider() != null && user.getProvider() != AuthProvider.LOCAL) {
+            log.warn("Login failed: account uses non-local provider email={} provider={}", request.getEmail(), user.getProvider());
             throw new AuthException("This account uses Google sign-in. Please use Google login.");
         }
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+            log.warn("Login failed: incorrect password email={}", request.getEmail());
             throw new AuthException("Incorrect password");
         }
 
-        if (!user.getIsActive()) {
+        if (!Boolean.TRUE.equals(user.getIsActive())) {
+            log.warn("Login failed: account inactive email={}", request.getEmail());
             throw new AuthException("Your account is not activated yet. Please verify your email.");
         }
 
         String token = jwtService.generateToken(user, request.getRememberMe());
+        log.info("Login success for email={}", request.getEmail());
 
         return AuthResponse.builder()
                 .token(token)
