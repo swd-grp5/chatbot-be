@@ -120,7 +120,8 @@ public class VnpayPaymentService {
     @Transactional
     public IpnResponse handleIpn(Map<String, String> params) {
         if (!verifySignature(params)) {
-            log.warn("VNPAY IPN invalid signature for txnRef={}", params.get("vnp_TxnRef"));
+            log.warn("VNPAY IPN invalid signature for txnRef={} tmnCode={} paramKeys={}",
+                    params.get("vnp_TxnRef"), params.get("vnp_TmnCode"), params.keySet());
             return IpnResponse.of(IpnResponseCode.INVALID_SIGNATURE);
         }
 
@@ -219,9 +220,16 @@ public class VnpayPaymentService {
         if (receivedHash == null || receivedHash.isBlank()) {
             return false;
         }
-        Map<String, String> signed = new TreeMap<>(params);
-        signed.remove("vnp_SecureHash");
-        signed.remove("vnp_SecureHashType");
+        Map<String, String> signed = new TreeMap<>();
+        params.forEach((key, value) -> {
+            if (key.startsWith("vnp_")
+                    && !"vnp_SecureHash".equals(key)
+                    && !"vnp_SecureHashType".equals(key)
+                    && value != null
+                    && !value.isEmpty()) {
+                signed.put(key, value);
+            }
+        });
         String hashData = VnpayUtil.buildHashData(signed);
         String expected = VnpayUtil.hmacSHA512(vnpay.getHashSecret(), hashData);
         return expected.equalsIgnoreCase(receivedHash);
