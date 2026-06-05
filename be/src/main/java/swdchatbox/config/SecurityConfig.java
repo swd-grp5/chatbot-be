@@ -41,23 +41,23 @@ public class SecurityConfig {
                 )
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
-                                "/api/auth/register",
-                                "/api/auth/login",
-                                "/api/auth/google",
-                                "/api/auth/verify",
-                                "/api/auth/verify-email",
-                                "/api/auth/forgot-password",
-                                "/api/auth/reset-password",
-                                "/api/auth/resend-verification",
-                                "/api/payments/vnpay/ipn",
-                                "/api/payments/vnpay/return",
-                                "/api/health",
+                                "/auth/register",
+                                "/auth/login",
+                                "/auth/google",
+                                "/auth/verify",
+                                "/auth/verify-email",
+                                "/auth/forgot-password",
+                                "/auth/reset-password",
+                                "/auth/resend-verification",
+                                "/payments/vnpay/ipn",
+                                "/payments/vnpay/return",
+                                "/health",
                                 "/swagger-ui.html",
                                 "/swagger-ui/**",
                                 "/v3/api-docs/**"
                         ).permitAll()
-                        .requestMatchers(HttpMethod.PUT, "/api/auth/role/**").hasRole("ADMIN")
-                        .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.PUT, "/auth/role/**").hasRole("ADMIN")
+                        .requestMatchers("/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(

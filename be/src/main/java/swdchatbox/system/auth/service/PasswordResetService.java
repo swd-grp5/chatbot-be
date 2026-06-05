@@ -71,7 +71,7 @@ public class PasswordResetService {
                 .build();
         tokenRepository.save(prt);
 
-        String resetLink = baseUrl + "/api/auth/reset-password?token=" + token;
+        String resetLink = baseUrl + "/auth/reset-password?token=" + token;
         String subject = "Đặt lại mật khẩu " + fromName;
         String html = buildResetPasswordHtml(user.getFullName(), resetLink);
 

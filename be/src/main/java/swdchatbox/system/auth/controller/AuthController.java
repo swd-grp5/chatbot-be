@@ -30,7 +30,7 @@ import java.util.UUID;
 
 @Slf4j
 @RestController
-@RequestMapping("/api/auth")
+@RequestMapping("/auth")
 @RequiredArgsConstructor
 @SecurityRequirements
 public class AuthController {
@@ -64,7 +64,7 @@ public class AuthController {
         return ResponseEntity.ok(authService.loginWithGoogle(request));
     }
 
-    @Operation(summary = "Xác thực email", description = "FE mở link xác thực email có kèm `token` trong query string. Ví dụ: `/api/auth/verify-email?token=...`.")
+    @Operation(summary = "Xác thực email", description = "FE mở link xác thực email có kèm `token` trong query string. Ví dụ: `/auth/verify-email?token=...`.")
     @GetMapping("/verify-email")
     public ResponseEntity<?> verifyEmail(@Parameter(description = "Token xác thực email") @RequestParam("token") String token) {
         emailVerificationService.verifyToken(token);

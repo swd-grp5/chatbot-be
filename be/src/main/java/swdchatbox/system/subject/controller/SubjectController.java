@@ -18,7 +18,7 @@ import swdchatbox.system.subject.service.SubjectService;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/subjects")
+@RequestMapping("/subjects")
 @RequiredArgsConstructor
 @SecurityRequirement(name = "bearerAuth")
 public class SubjectController {

@@ -18,7 +18,7 @@ import swdchatbox.system.wallet.service.WalletService;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/wallet")
+@RequestMapping("/wallet")
 @RequiredArgsConstructor
 @SecurityRequirement(name = "bearerAuth")
 public class WalletController {

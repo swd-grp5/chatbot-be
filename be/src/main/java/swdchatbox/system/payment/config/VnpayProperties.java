@@ -17,7 +17,7 @@ public class VnpayProperties {
 
     private String payUrl = "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html";
 
-    private String returnUrl = "http://localhost:8080/api/payments/vnpay/return";
+    private String returnUrl = "http://localhost:8080/payments/vnpay/return";
 
     private String version = "2.1.0";
 
