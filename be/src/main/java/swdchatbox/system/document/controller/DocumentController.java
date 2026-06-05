@@ -41,17 +41,16 @@ public class DocumentController {
     private final DocumentService documentService;
     private final DocumentIndexingService documentIndexingService;
 
-    @Operation(summary = "Upload tài liệu", description = "FE gửi `multipart/form-data` với field `data` (title, description) và `files`. Không cho upload trùng title trong cùng subject.")
+    @Operation(summary = "Upload tài liệu", description = "FE gửi `multipart/form-data`: `data` là mảng JSON (title, description), mỗi phần tử tương ứng 1 file trong `files`. Không cho trùng title trong subject và không cho trùng nội dung file.")
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<DocumentResponse> upload(
-            @Valid @RequestPart(value = "data", required = false) DocumentUploadRequest request,
-            @Parameter(description = "Danh sách file upload")
+    public ResponseEntity<List<DocumentResponse>> upload(
+            @Valid @RequestPart(value = "data", required = false) List<DocumentUploadRequest> data,
+            @Parameter(description = "Danh sách file upload, thứ tự khớp với mảng data")
             @RequestPart(value = "files", required = false) List<MultipartFile> files,
             Authentication authentication
     ) {
-        DocumentUploadRequest uploadRequest = request != null ? request : new DocumentUploadRequest();
         String userEmail = authentication != null ? authentication.getName() : null;
-        return ResponseEntity.ok(documentService.upload(uploadRequest, files, userEmail));
+        return ResponseEntity.ok(documentService.upload(data, files, userEmail));
     }
 
     @Operation(summary = "Thống kê tài liệu", description = "FE dùng để hiển thị số liệu dashboard như tổng document, ready, processing, failed.")

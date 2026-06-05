@@ -27,6 +27,18 @@ public class DocumentStorageService {
         this.basePath = Path.of(properties.getBasePath()).toAbsolutePath().normalize();
     }
 
+    public String computeChecksum(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new BadRequestException("File must not be empty");
+        }
+        try {
+            MessageDigest digest = MessageDigest.getInstance(properties.getChecksumAlgorithm());
+            return HexFormat.of().formatHex(digest.digest(file.getBytes()));
+        } catch (NoSuchAlgorithmException | IOException e) {
+            throw new BadRequestException("Failed to compute file checksum");
+        }
+    }
+
     public StoredDocumentFile store(UUID documentId, MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new BadRequestException("File must not be empty");

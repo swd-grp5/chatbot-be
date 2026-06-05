@@ -33,8 +33,10 @@ import swdchatbox.system.subject.repository.SubjectRepository;
 import swdchatbox.system.user.entity.User;
 import swdchatbox.system.user.repository.UserRepository;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
 import java.nio.file.Path;
@@ -57,36 +59,42 @@ public class DocumentService {
     private final DocumentPageCountService documentPageCountService;
 
     @Transactional
-    public DocumentResponse upload(DocumentUploadRequest request, List<MultipartFile> files, String userEmail) {
-        validateUploadFiles(files);
+    public List<DocumentResponse> upload(List<DocumentUploadRequest> items, List<MultipartFile> files, String userEmail) {
+        List<MultipartFile> validFiles = getValidFiles(files);
+        validateUploadFiles(validFiles);
 
+        List<DocumentUploadRequest> metadata = normalizeMetadata(items, validFiles.size());
         Subject subject = findDefaultSubject();
-        String title = resolveTitle(request.getTitle(), files);
-
-        if (documentRepository.existsBySubject_IdAndTitleIgnoreCase(subject.getId(), title)) {
-            throw new BadRequestException("Document with the same title already exists");
-        }
-
         User uploadedBy = resolveUploadedBy(userEmail);
 
-        Document document = Document.builder()
-                .subject(subject)
-                .uploadedBy(uploadedBy)
-                .title(title)
-                .description(request.getDescription())
-                .documentType(resolveDocumentType(files))
-                .status(DocumentStatus.UPLOADED)
-                .totalPages(0)
-                .totalChunks(0)
-                .extractedText("")
-                .active(true)
-                .build();
+        validateUploadBatch(subject, validFiles, metadata);
 
-        document = documentRepository.save(document);
-        saveFiles(document, files);
-        refreshTotalPages(document);
-        documentIndexJobService.enqueue(document.getId());
-        return toResponse(document);
+        List<DocumentResponse> responses = new ArrayList<>();
+        for (int i = 0; i < validFiles.size(); i++) {
+            MultipartFile file = validFiles.get(i);
+            DocumentUploadRequest item = metadata.get(i);
+            String title = resolveTitle(item.getTitle(), List.of(file));
+
+            Document document = Document.builder()
+                    .subject(subject)
+                    .uploadedBy(uploadedBy)
+                    .title(title)
+                    .description(item.getDescription())
+                    .documentType(resolveDocumentType(List.of(file)))
+                    .status(DocumentStatus.UPLOADED)
+                    .totalPages(0)
+                    .totalChunks(0)
+                    .extractedText("")
+                    .active(true)
+                    .build();
+
+            document = documentRepository.save(document);
+            saveFiles(document, List.of(file));
+            refreshTotalPages(document);
+            documentIndexJobService.enqueue(document.getId());
+            responses.add(toResponse(document));
+        }
+        return responses;
     }
 
     private String resolveTitle(String requestedTitle, List<MultipartFile> files) {
@@ -291,8 +299,55 @@ public class DocumentService {
     ) {}
 
     private void validateUploadFiles(List<MultipartFile> files) {
-        if (files == null || files.stream().noneMatch(file -> file != null && !file.isEmpty())) {
+        if (files.isEmpty()) {
             throw new BadRequestException("At least one file is required");
+        }
+    }
+
+    private List<MultipartFile> getValidFiles(List<MultipartFile> files) {
+        if (files == null) {
+            return List.of();
+        }
+        return files.stream()
+                .filter(file -> file != null && !file.isEmpty())
+                .toList();
+    }
+
+    private List<DocumentUploadRequest> normalizeMetadata(List<DocumentUploadRequest> items, int fileCount) {
+        if (items == null || items.isEmpty()) {
+            return java.util.stream.IntStream.range(0, fileCount)
+                    .mapToObj(i -> new DocumentUploadRequest())
+                    .toList();
+        }
+        if (items.size() != fileCount) {
+            throw new BadRequestException("Number of metadata items must match number of files");
+        }
+        return items;
+    }
+
+    private void validateUploadBatch(Subject subject, List<MultipartFile> files, List<DocumentUploadRequest> metadata) {
+        Set<String> seenTitles = new HashSet<>();
+        Set<String> seenChecksums = new HashSet<>();
+
+        for (int i = 0; i < files.size(); i++) {
+            MultipartFile file = files.get(i);
+            String title = resolveTitle(metadata.get(i).getTitle(), List.of(file));
+            String normalizedTitle = title.toLowerCase(Locale.ROOT);
+
+            if (!seenTitles.add(normalizedTitle)) {
+                throw new BadRequestException("Duplicate title in upload request: " + title);
+            }
+            if (documentRepository.existsBySubject_IdAndTitleIgnoreCase(subject.getId(), title)) {
+                throw new BadRequestException("Document with the same title already exists: " + title);
+            }
+
+            String checksum = documentStorageService.computeChecksum(file);
+            if (!seenChecksums.add(checksum)) {
+                throw new BadRequestException("Duplicate file content in upload request");
+            }
+            if (documentFileRepository.existsByChecksum(checksum)) {
+                throw new BadRequestException("A file with the same content already exists");
+            }
         }
     }
 
@@ -316,7 +371,11 @@ public class DocumentService {
             var stored = documentStorageService.store(document.getId(), file);
             if (!seenChecksums.add(stored.checksum())) {
                 documentStorageService.deleteFile(stored.filePath());
-                continue;
+                throw new BadRequestException("Duplicate file content in upload request");
+            }
+            if (documentFileRepository.existsByChecksum(stored.checksum())) {
+                documentStorageService.deleteFile(stored.filePath());
+                throw new BadRequestException("A file with the same content already exists");
             }
             DocumentFile documentFile = DocumentFile.builder()
                     .document(document)

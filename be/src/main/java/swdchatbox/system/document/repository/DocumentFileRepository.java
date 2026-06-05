@@ -13,4 +13,6 @@ public interface DocumentFileRepository extends JpaRepository<DocumentFile, UUID
     Optional<DocumentFile> findByIdAndDocument_Id(UUID id, UUID documentId);
 
     void deleteAllByDocument_Id(UUID documentId);
+
+    boolean existsByChecksum(String checksum);
 }
