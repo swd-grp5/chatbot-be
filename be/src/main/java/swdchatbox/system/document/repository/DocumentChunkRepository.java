@@ -7,7 +7,12 @@ import java.util.List;
 import java.util.UUID;
 
 public interface DocumentChunkRepository extends JpaRepository<DocumentChunk, UUID> {
+
     List<DocumentChunk> findAllByDocument_IdOrderByChunkIndexAsc(UUID documentId);
 
+    List<DocumentChunk> findAllByIdIn(List<UUID> ids);
+
     void deleteAllByDocument_Id(UUID documentId);
+
+    long countByDocument_Id(UUID documentId);
 }
