@@ -120,8 +120,14 @@ public class VnpayPaymentService {
     @Transactional
     public IpnResponse handleIpn(Map<String, String> params) {
         if (!verifySignature(params)) {
-            log.warn("VNPAY IPN invalid signature for txnRef={} tmnCode={} paramKeys={}",
-                    params.get("vnp_TxnRef"), params.get("vnp_TmnCode"), params.keySet());
+            log.warn(
+                    "VNPAY IPN invalid signature for txnRef={} receivedTmnCode={} configuredTmnCode={} "
+                            + "hashSecretConfigured={} paramKeys={}",
+                    params.get("vnp_TxnRef"),
+                    params.get("vnp_TmnCode"),
+                    vnpay.getTmnCode(),
+                    vnpay.getHashSecret() != null && !vnpay.getHashSecret().isBlank(),
+                    params.keySet());
             return IpnResponse.of(IpnResponseCode.INVALID_SIGNATURE);
         }
 
