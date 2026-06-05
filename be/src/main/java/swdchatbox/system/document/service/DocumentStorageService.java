@@ -3,6 +3,8 @@ package swdchatbox.system.document.service;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import swdchatbox.system.common.exception.BadRequestException;
+import swdchatbox.system.common.exception.ResourceNotFoundException;
+import swdchatbox.system.document.entity.DocumentFile;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -49,6 +51,55 @@ public class DocumentStorageService {
         } catch (IOException | NoSuchAlgorithmException e) {
             throw new BadRequestException("Failed to store uploaded file");
         }
+    }
+
+    public byte[] readFile(UUID documentId, DocumentFile file) {
+        return readFileBytes(getReadableFilePath(documentId, file));
+    }
+
+    public Path getReadableFilePath(UUID documentId, DocumentFile file) {
+        if (file == null) {
+            throw new ResourceNotFoundException("File not found");
+        }
+
+        Path resolved = resolveFilePath(documentId, file);
+        if (!Files.exists(resolved)) {
+            throw new ResourceNotFoundException("File not found on disk");
+        }
+
+        return resolved;
+    }
+
+    public long getFileSize(Path path) {
+        try {
+            return Files.size(path);
+        } catch (IOException e) {
+            throw new BadRequestException("Failed to read stored file");
+        }
+    }
+
+    private byte[] readFileBytes(Path path) {
+        try {
+            return Files.readAllBytes(path);
+        } catch (IOException e) {
+            throw new BadRequestException("Failed to read stored file");
+        }
+    }
+
+    private Path resolveFilePath(UUID documentId, DocumentFile file) {
+        Path fromBasePath = basePath.resolve(documentId.toString()).resolve(file.getStoredFileName()).normalize();
+        if (Files.exists(fromBasePath)) {
+            return fromBasePath;
+        }
+
+        if (file.getFilePath() != null && !file.getFilePath().isBlank()) {
+            Path fromDatabase = Path.of(file.getFilePath()).toAbsolutePath().normalize();
+            if (Files.exists(fromDatabase)) {
+                return fromDatabase;
+            }
+        }
+
+        return fromBasePath;
     }
 
     public void deleteFile(String filePath) {

@@ -12,6 +12,8 @@ import java.util.UUID;
 public interface DocumentIndexJobRepository extends JpaRepository<DocumentIndexJob, UUID> {
     Optional<DocumentIndexJob> findByDocument_Id(UUID documentId);
 
+    void deleteAllByDocument_Id(UUID documentId);
+
     List<DocumentIndexJob> findTop50ByStatusInAndNextRunAtLessThanEqualOrderByNextRunAtAsc(
             List<DocumentIndexJobStatus> statuses,
             LocalDateTime now

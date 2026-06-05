@@ -16,20 +16,28 @@ import swdchatbox.system.document.dto.request.DocumentUploadRequest;
 import swdchatbox.system.document.dto.response.DocumentDashboardStatsResponse;
 import swdchatbox.system.document.dto.response.DocumentIndexStatusResponse;
 import swdchatbox.system.document.dto.response.DocumentResponse;
+import swdchatbox.system.document.dto.response.DocumentViewResponse;
 import swdchatbox.system.document.entity.Document;
 import swdchatbox.system.document.entity.DocumentFile;
 import swdchatbox.system.document.enums.DocumentStatus;
 import swdchatbox.system.document.enums.DocumentType;
 import swdchatbox.system.document.mapper.DocumentFileMapper;
 import swdchatbox.system.document.mapper.DocumentMapper;
+import swdchatbox.system.document.repository.DocumentChunkRepository;
 import swdchatbox.system.document.repository.DocumentFileRepository;
+import swdchatbox.system.document.repository.DocumentIndexJobRepository;
 import swdchatbox.system.document.repository.DocumentRepository;
 import swdchatbox.system.document.repository.DocumentSpecifications;
 import swdchatbox.system.subject.entity.Subject;
 import swdchatbox.system.subject.repository.SubjectRepository;
+import swdchatbox.system.user.entity.User;
+import swdchatbox.system.user.repository.UserRepository;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.nio.file.Path;
 import java.util.regex.Pattern;
 
 @Service
@@ -40,18 +48,30 @@ public class DocumentService {
 
     private final DocumentRepository documentRepository;
     private final DocumentFileRepository documentFileRepository;
+    private final DocumentChunkRepository documentChunkRepository;
+    private final DocumentIndexJobRepository documentIndexJobRepository;
     private final SubjectRepository subjectRepository;
+    private final UserRepository userRepository;
     private final DocumentStorageService documentStorageService;
     private final DocumentIndexJobService documentIndexJobService;
+    private final DocumentPageCountService documentPageCountService;
 
     @Transactional
-    public DocumentResponse upload(DocumentUploadRequest request, List<MultipartFile> files) {
-        Subject subject = findDefaultSubject();
+    public DocumentResponse upload(DocumentUploadRequest request, List<MultipartFile> files, String userEmail) {
+        validateUploadFiles(files);
 
+        Subject subject = findDefaultSubject();
         String title = resolveTitle(request.getTitle(), files);
+
+        if (documentRepository.existsBySubject_IdAndTitleIgnoreCase(subject.getId(), title)) {
+            throw new BadRequestException("Document with the same title already exists");
+        }
+
+        User uploadedBy = resolveUploadedBy(userEmail);
 
         Document document = Document.builder()
                 .subject(subject)
+                .uploadedBy(uploadedBy)
                 .title(title)
                 .description(request.getDescription())
                 .documentType(resolveDocumentType(files))
@@ -64,6 +84,7 @@ public class DocumentService {
 
         document = documentRepository.save(document);
         saveFiles(document, files);
+        refreshTotalPages(document);
         documentIndexJobService.enqueue(document.getId());
         return toResponse(document);
     }
@@ -148,7 +169,26 @@ public class DocumentService {
     }
 
     public DocumentResponse findById(UUID id) {
-        return toResponse(findDocument(id));
+        Document document = refreshTotalPagesIfMissing(findDocument(id));
+        return toResponse(document);
+    }
+
+    public DocumentViewResponse getViewerInfo(UUID id) {
+        Document document = refreshTotalPagesIfMissing(findDocument(id));
+        DocumentFile file = documentFileRepository.findAllByDocument_Id(id).stream()
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("File not found"));
+
+        return DocumentViewResponse.builder()
+                .id(document.getId())
+                .title(document.getTitle())
+                .description(document.getDescription())
+                .documentType(document.getDocumentType())
+                .totalPages(document.getTotalPages())
+                .fileId(file.getId())
+                .fileName(file.getOriginalFileName())
+                .mimeType(file.getMimeType())
+                .build();
     }
 
     public DocumentIndexStatusResponse getIndexStatus(UUID id) {
@@ -156,38 +196,23 @@ public class DocumentService {
     }
 
     @Transactional
-    public DocumentResponse update(UUID id, DocumentUpdateRequest request, List<MultipartFile> files) {
+    public DocumentResponse update(UUID id, DocumentUpdateRequest request) {
         Document document = findDocument(id);
-        Subject subject = findSubject(request.getSubjectId());
+        String title = request.getTitle().trim();
 
-        document.setSubject(subject);
-        document.setTitle(request.getTitle());
+        if (documentRepository.existsBySubject_IdAndTitleIgnoreCaseAndIdNot(
+                document.getSubject().getId(), title, id)) {
+            throw new BadRequestException("Document with the same title already exists");
+        }
+
+        document.setTitle(title);
         document.setDescription(request.getDescription());
-        document.setDocumentType(request.getDocumentType());
         if (request.getActive() != null) {
             document.setActive(request.getActive());
         }
 
         documentRepository.save(document);
-        if (files != null && !files.isEmpty()) {
-            saveFiles(document, files);
-            documentIndexJobService.enqueue(document.getId());
-        }
         return toResponse(document);
-    }
-
-    private Subject findSubject(String subjectId) {
-        if (subjectId == null || subjectId.isBlank()) {
-            return findDefaultSubject();
-        }
-
-        try {
-            UUID id = UUID.fromString(subjectId.trim());
-            return subjectRepository.findById(id)
-                    .orElseThrow(() -> new ResourceNotFoundException("Subject not found"));
-        } catch (IllegalArgumentException exception) {
-            throw new BadRequestException("Invalid subject id");
-        }
     }
 
 
@@ -195,6 +220,7 @@ public class DocumentService {
     public DocumentResponse addFiles(UUID id, List<MultipartFile> files) {
         Document document = findDocument(id);
         saveFiles(document, files);
+        refreshTotalPages(document);
         documentIndexJobService.enqueue(document.getId());
         return toResponse(document);
     }
@@ -207,6 +233,8 @@ public class DocumentService {
             documentStorageService.deleteFile(file.getFilePath());
         }
         documentStorageService.deleteDocumentFolder(id);
+        documentChunkRepository.deleteAllByDocument_Id(id);
+        documentIndexJobRepository.deleteAllByDocument_Id(id);
         documentFileRepository.deleteAllByDocument_Id(id);
         documentRepository.delete(document);
     }
@@ -224,15 +252,72 @@ public class DocumentService {
         return toResponse(findDocument(id));
     }
 
+    public DocumentFileResource getViewContent(UUID documentId) {
+        Document document = refreshTotalPagesIfMissing(findDocument(documentId));
+        DocumentFile file = documentFileRepository.findAllByDocument_Id(documentId).stream()
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("File not found"));
+        return toFileResource(document, documentId, file);
+    }
+
+    public DocumentFileResource getFileViewContent(UUID documentId, UUID fileId) {
+        Document document = refreshTotalPagesIfMissing(findDocument(documentId));
+        DocumentFile file = documentFileRepository.findByIdAndDocument_Id(fileId, documentId)
+                .orElseThrow(() -> new ResourceNotFoundException("File not found"));
+        return toFileResource(document, documentId, file);
+    }
+
+    public DocumentFileResource getDownloadContent(UUID documentId) {
+        return getViewContent(documentId);
+    }
+
+    public DocumentFileResource getFileDownloadContent(UUID documentId, UUID fileId) {
+        return getFileViewContent(documentId, fileId);
+    }
+
+    private DocumentFileResource toFileResource(Document document, UUID documentId, DocumentFile file) {
+        Path path = documentStorageService.getReadableFilePath(documentId, file);
+        long fileSize = documentStorageService.getFileSize(path);
+        int totalPages = document.getTotalPages() != null ? document.getTotalPages() : 0;
+        return new DocumentFileResource(file.getOriginalFileName(), file.getMimeType(), path, fileSize, totalPages);
+    }
+
+    public record DocumentFileResource(
+            String originalFileName,
+            String mimeType,
+            Path path,
+            long fileSize,
+            int totalPages
+    ) {}
+
+    private void validateUploadFiles(List<MultipartFile> files) {
+        if (files == null || files.stream().noneMatch(file -> file != null && !file.isEmpty())) {
+            throw new BadRequestException("At least one file is required");
+        }
+    }
+
+    private User resolveUploadedBy(String userEmail) {
+        if (userEmail == null || userEmail.isBlank()) {
+            return null;
+        }
+        return userRepository.findByEmail(userEmail).orElse(null);
+    }
+
     private void saveFiles(Document document, List<MultipartFile> files) {
         if (files == null) {
             return;
         }
+
+        Set<String> seenChecksums = new HashSet<>();
         for (MultipartFile file : files) {
             if (file == null || file.isEmpty()) {
                 continue;
             }
             var stored = documentStorageService.store(document.getId(), file);
+            if (!seenChecksums.add(stored.checksum())) {
+                documentStorageService.deleteFile(stored.filePath());
+                continue;
+            }
             DocumentFile documentFile = DocumentFile.builder()
                     .document(document)
                     .originalFileName(stored.originalFileName())
@@ -254,6 +339,19 @@ public class DocumentService {
     private Document findDocument(UUID id) {
         return documentRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Document not found"));
+    }
+
+    private Document refreshTotalPagesIfMissing(Document document) {
+        if (document.getTotalPages() != null && document.getTotalPages() > 0) {
+            return document;
+        }
+        return refreshTotalPages(document);
+    }
+
+    private Document refreshTotalPages(Document document) {
+        int totalPages = documentPageCountService.countDocumentPages(document.getId());
+        document.setTotalPages(totalPages);
+        return documentRepository.save(document);
     }
 
     private DocumentResponse toResponse(Document document) {
