@@ -9,7 +9,7 @@ import swdchatbox.system.common.dto.HealthCheckResponse;
 import swdchatbox.system.common.service.HealthCheckService;
 
 @RestController
-@RequestMapping("/api")
+@RequestMapping
 @RequiredArgsConstructor
 public class HealthController {
 

@@ -16,7 +16,7 @@ import swdchatbox.system.user.mapper.UserMapper;
 import swdchatbox.system.user.repository.UserRepository;
 
 @RestController
-@RequestMapping("/api/users")
+@RequestMapping("/users")
 @RequiredArgsConstructor
 @SecurityRequirement(name = "bearerAuth")
 public class UserController {

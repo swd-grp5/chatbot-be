@@ -64,7 +64,7 @@ public class EmailVerificationService {
 
         tokenRepository.save(evt);
 
-        String verifyLink = verifyBaseUrl + "/api/auth/verify-email?token=" + token;
+        String verifyLink = verifyBaseUrl + "/auth/verify-email?token=" + token;
         String subject = "Xác minh tài khoản " + fromName;
         String html = buildVerifyEmailHtml(user.getFullName(), verifyLink);
 

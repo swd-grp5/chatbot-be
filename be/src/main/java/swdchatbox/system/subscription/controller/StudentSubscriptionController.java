@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/subscriptions")
+@RequestMapping("/subscriptions")
 @RequiredArgsConstructor
 @SecurityRequirement(name = "bearerAuth")
 public class StudentSubscriptionController {

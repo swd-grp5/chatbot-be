@@ -22,7 +22,7 @@ import java.util.Map;
  */
 @Slf4j
 @RestController
-@RequestMapping("/api/payments/vnpay")
+@RequestMapping("/payments/vnpay")
 @RequiredArgsConstructor
 public class VnpayIpnController {
 
