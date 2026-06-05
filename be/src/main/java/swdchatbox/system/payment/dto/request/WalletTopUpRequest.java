@@ -12,6 +12,12 @@ public record WalletTopUpRequest(
         @DecimalMin(value = "1000", message = "Số tiền nạp tối thiểu là 1.000 VND")
         BigDecimal amount,
 
-        @Schema(description = "Mã ngân hàng VNPAY (tuỳ chọn, để trống sẽ hiển thị cổng chọn ngân hàng)", example = "NCB")
+        @Schema(hidden = true)
         String bankCode
-) {}
+) {
+    public WalletTopUpRequest {
+        if (bankCode == null || bankCode.isBlank()) {
+            bankCode = "NCB";
+        }
+    }
+}
