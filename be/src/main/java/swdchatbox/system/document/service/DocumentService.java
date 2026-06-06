@@ -39,7 +39,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
-import java.nio.file.Path;
+import org.springframework.core.io.Resource;
 import java.util.regex.Pattern;
 
 @Service
@@ -284,16 +284,21 @@ public class DocumentService {
     }
 
     private DocumentFileResource toFileResource(Document document, UUID documentId, DocumentFile file) {
-        Path path = documentStorageService.getReadableFilePath(documentId, file);
-        long fileSize = documentStorageService.getFileSize(path);
+        var storedFile = documentStorageService.openReadableFile(documentId, file);
         int totalPages = document.getTotalPages() != null ? document.getTotalPages() : 0;
-        return new DocumentFileResource(file.getOriginalFileName(), file.getMimeType(), path, fileSize, totalPages);
+        return new DocumentFileResource(
+                file.getOriginalFileName(),
+                file.getMimeType(),
+                storedFile.resource(),
+                storedFile.fileSize(),
+                totalPages
+        );
     }
 
     public record DocumentFileResource(
             String originalFileName,
             String mimeType,
-            Path path,
+            Resource resource,
             long fileSize,
             int totalPages
     ) {}

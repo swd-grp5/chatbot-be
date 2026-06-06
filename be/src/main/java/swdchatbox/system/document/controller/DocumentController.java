@@ -5,7 +5,6 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -173,7 +172,6 @@ public class DocumentController {
     }
 
     private ResponseEntity<Resource> buildFileResponse(DocumentService.DocumentFileResource file, boolean attachment) {
-        Resource resource = new FileSystemResource(file.path());
         String dispositionType = attachment ? "attachment" : "inline";
 
         return ResponseEntity.ok()
@@ -181,7 +179,7 @@ public class DocumentController {
                 .header("X-Total-Pages", String.valueOf(file.totalPages()))
                 .contentType(resolveMediaType(file.mimeType()))
                 .contentLength(file.fileSize())
-                .body(resource);
+                .body(file.resource());
     }
 
     private MediaType resolveMediaType(String mimeType) {

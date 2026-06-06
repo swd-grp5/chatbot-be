@@ -12,8 +12,6 @@ import swdchatbox.system.document.repository.DocumentFileRepository;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
 
@@ -43,19 +41,18 @@ public class DocumentPageCountService {
 
     private int countFilePages(UUID documentId, DocumentFile file) {
         try {
-            Path path = documentStorageService.getReadableFilePath(documentId, file);
-            return countPages(path, file.getMimeType(), file.getOriginalFileName());
+            return countPages(documentId, file);
         } catch (ResourceNotFoundException ex) {
             return 0;
         }
     }
 
-    private int countPages(Path path, String mimeType, String originalFileName) {
-        if (isPlainText(mimeType, originalFileName)) {
+    private int countPages(UUID documentId, DocumentFile file) {
+        if (isPlainText(file.getMimeType(), file.getOriginalFileName())) {
             return 1;
         }
 
-        try (InputStream inputStream = Files.newInputStream(path)) {
+        try (InputStream inputStream = documentStorageService.openInputStream(documentId, file)) {
             Metadata metadata = new Metadata();
             parser.parse(inputStream, new BodyContentHandler(-1), metadata, new ParseContext());
             return parsePageCount(metadata);
