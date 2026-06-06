@@ -14,4 +14,8 @@ public interface DocumentRepository extends JpaRepository<Document, UUID>, JpaSp
 
     @Query("select count(d) from Document d")
     long countAllDocuments();
+
+    boolean existsBySubject_IdAndTitleIgnoreCase(UUID subjectId, String title);
+
+    boolean existsBySubject_IdAndTitleIgnoreCaseAndIdNot(UUID subjectId, String title, UUID id);
 }
