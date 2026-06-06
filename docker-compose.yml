@@ -1,33 +1,60 @@
-name: swdchatbox
+name: swdchatbox-be
 
 services:
-  mysql:
-    image: mysql:8.4
-    container_name: swdchatbox
-
+  be:
+    build:
+      context: ./be
+      dockerfile: Dockerfile
+    image: swdchatbox-be:latest
+    # Image build local — không có trên Docker Hub; tránh Portainer "compose pull" fail
+    pull_policy: build
+    container_name: swdchatbox-be
     restart: unless-stopped
-
-    env_file:
-      - .env
-
-    environment:
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-
     ports:
-      - "${MYSQL_PORT}:3306"
+      - "${SPRING_PORT:-8080}:8080"
+    environment:
+      # MySQL bên ngoài (VPS / stack DB riêng) — không chạy MySQL trong compose này
+      MYSQL_HOST: ${MYSQL_HOST:?Set MYSQL_HOST}
+      MYSQL_PORT: ${MYSQL_PORT:-3306}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-swdchatbox}
+      MYSQL_USE_SSL: ${MYSQL_USE_SSL:-false}
+      MYSQL_USER: ${MYSQL_USER:-swd_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD}
+      SPRING_JPA_SHOW_SQL: ${SPRING_JPA_SHOW_SQL:-false}
 
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+      JWT_EXPIRATION_MS: ${JWT_EXPIRATION_MS:-86400000}
+      JWT_SHORT_EXPIRATION_MS: ${JWT_SHORT_EXPIRATION_MS:-3600000}
+
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+
+      # Mail (Resend)
+      SPRING_MAIL_FROM: ${SPRING_MAIL_FROM:-}
+      SPRING_MAIL_FROM_NAME: ${SPRING_MAIL_FROM_NAME:-SWDChatBox}
+      SPRING_MAIL_REPLY_TO: ${SPRING_MAIL_REPLY_TO:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:8080}
+      VERIFY_BASE_URL: ${VERIFY_BASE_URL:-http://localhost:8080}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173}
+
+      MULTIPART_ENABLED: ${MULTIPART_ENABLED:-true}
+      MAX_FILE_SIZE: ${MAX_FILE_SIZE:-200MB}
+      MAX_REQUEST_SIZE: ${MAX_REQUEST_SIZE:-250MB}
+      STORAGE_DOCUMENTS_BASE_PATH: ${STORAGE_DOCUMENTS_BASE_PATH:-uploads/documents}
+      STORAGE_DOCUMENTS_CHECKSUM_ALGORITHM: ${STORAGE_DOCUMENTS_CHECKSUM_ALGORITHM:-SHA-256}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
+      AWS_S3_REGION: ${AWS_S3_REGION:-ap-southeast-2}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_S3_KEY_PREFIX: ${AWS_S3_KEY_PREFIX:-documents}
+
+      # VNPAY (Sandbox / TEST)
+      VNPAY_TMN_CODE: ${VNPAY_TMN_CODE:?Set VNPAY_TMN_CODE}
+      VNPAY_HASH_SECRET: ${VNPAY_HASH_SECRET:?Set VNPAY_HASH_SECRET}
+      VNPAY_RETURN_URL: ${VNPAY_RETURN_URL:?Set VNPAY_RETURN_URL}
     volumes:
-      - swdchatbox:/var/lib/mysql
-      - ./docker/mysql/init:/docker-entrypoint-initdb.d
-
-    command:
-      [
-        "--character-set-server=utf8mb4",
-        "--collation-server=utf8mb4_unicode_ci"
-      ]
+      - be-uploads:/app/uploads
 
 volumes:
-  swdchatbox:
+  be-uploads:

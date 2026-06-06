@@ -10,6 +10,17 @@ import org.springframework.stereotype.Component;
 @Component
 @ConfigurationProperties(prefix = "app.storage.documents")
 public class DocumentStorageProperties {
-    private String basePath = "uploads/documents";
-    private String checksumAlgorithm = "SHA-256";
+    private String basePath;
+    private String checksumAlgorithm;
+    private S3 s3 = new S3();
+
+    @Getter
+    @Setter
+    public static class S3 {
+        private String bucket;
+        private String region;
+        private String accessKeyId;
+        private String secretAccessKey;
+        private String keyPrefix = "documents";
+    }
 }
