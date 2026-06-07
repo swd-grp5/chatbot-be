@@ -58,11 +58,11 @@ public class DocumentController {
         return ResponseEntity.ok(documentService.getStats());
     }
 
-    @Operation(summary = "Lấy trạng thái index", description = "FE dùng để kiểm tra document đã được index hay chưa trước khi hiển thị nội dung search/chunk.")
-    @GetMapping("/{id}/index-status")
-    public ResponseEntity<DocumentIndexStatusResponse> indexStatus(@PathVariable UUID id) {
-        return ResponseEntity.ok(documentService.getIndexStatus(id));
-    }
+//    @Operation(summary = "Lấy trạng thái index", description = "FE dùng để kiểm tra document đã được index hay chưa trước khi hiển thị nội dung search/chunk.")
+//    @GetMapping("/{id}/index-status")
+//    public ResponseEntity<DocumentIndexStatusResponse> indexStatus(@PathVariable UUID id) {
+//        return ResponseEntity.ok(documentService.getIndexStatus(id));
+//    }
 
     @Operation(summary = "Lấy danh sách chunks", description = "FE dùng để xem các đoạn nội dung đã index của document.")
     @GetMapping("/{id}/chunks")
@@ -98,7 +98,7 @@ public class DocumentController {
         return ResponseEntity.ok(documentService.findAll(filter, pageable));
     }
 
-    @Operation(summary = "Lấy chi tiết tài liệu", description = "FE dùng khi mở trang chi tiết document hoặc đổ dữ liệu vào form chỉnh sửa.")
+    @Operation(summary = "Lấy chi tiết tài liệu", description = "FE dùng khi mở trang chi tiết document")
     @GetMapping("/{id}")
     public ResponseEntity<DocumentResponse> getById(@PathVariable UUID id) {
         return ResponseEntity.ok(documentService.findById(id));
@@ -116,11 +116,6 @@ public class DocumentController {
         return buildFileResponse(documentService.getViewContent(id), false);
     }
 
-    @Operation(summary = "Xem file theo fileId", description = "FE dùng khi document có nhiều file và cần preview đúng file con.")
-    @GetMapping("/{documentId}/files/{fileId}/view")
-    public ResponseEntity<Resource> viewFile(@PathVariable UUID documentId, @PathVariable UUID fileId) {
-        return buildFileResponse(documentService.getFileViewContent(documentId, fileId), false);
-    }
 
     @Operation(summary = "Tải xuống file gốc của tài liệu", description = "FE dùng khi user muốn tải file về máy. Response trả về binary file dạng attachment.")
     @GetMapping("/{id}/download")
@@ -128,11 +123,6 @@ public class DocumentController {
         return buildFileResponse(documentService.getDownloadContent(id), true);
     }
 
-    @Operation(summary = "Tải xuống file theo fileId", description = "FE dùng khi document có nhiều file và muốn tải đúng file con theo `documentId` + `fileId`.")
-    @GetMapping("/{documentId}/files/{fileId}/download")
-    public ResponseEntity<Resource> downloadFile(@PathVariable UUID documentId, @PathVariable UUID fileId) {
-        return buildFileResponse(documentService.getFileDownloadContent(documentId, fileId), true);
-    }
 
     @Operation(summary = "Index lại tài liệu", description = "FE dùng khi cần reprocess/reindex document sau upload hoặc sau khi cập nhật file.")
     @PostMapping("/{id}/reindex")
@@ -155,14 +145,14 @@ public class DocumentController {
         return ResponseEntity.ok(documentService.update(id, request));
     }
 
-    @Operation(summary = "Thêm file vào tài liệu", description = "FE dùng khi document đã có sẵn và muốn upload thêm file con. Gửi multipart/form-data ở field `files`.")
-    @PostMapping(value = "/{id}/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<DocumentResponse> addFiles(
-            @PathVariable UUID id,
-            @Parameter(description = "Danh sách file cần thêm") @RequestPart("files") List<MultipartFile> files
-    ) {
-        return ResponseEntity.ok(documentService.addFiles(id, files));
-    }
+//    @Operation(summary = "Thêm file vào tài liệu", description = "FE dùng khi document đã có sẵn và muốn upload thêm file con. Gửi multipart/form-data ở field `files`.")
+//    @PostMapping(value = "/{id}/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+//    public ResponseEntity<DocumentResponse> addFiles(
+//            @PathVariable UUID id,
+//            @Parameter(description = "Danh sách file cần thêm") @RequestPart("files") List<MultipartFile> files
+//    ) {
+//        return ResponseEntity.ok(documentService.addFiles(id, files));
+//    }
 
     @Operation(summary = "Xóa tài liệu", description = "FE dùng để xóa document theo id. Sau khi xóa sẽ trả về HTTP 204.")
     @DeleteMapping("/{id}")

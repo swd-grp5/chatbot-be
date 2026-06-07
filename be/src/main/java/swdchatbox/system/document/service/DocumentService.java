@@ -2,6 +2,7 @@ package swdchatbox.system.document.service;
 
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import swdchatbox.system.common.dto.PageResponse;
@@ -44,6 +45,7 @@ import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class DocumentService {
 
     private static final Pattern FILE_EXTENSION_PATTERN = Pattern.compile("\\.[^.\\s]+$");
@@ -235,9 +237,13 @@ public class DocumentService {
 
     @Transactional
     public void delete(UUID id) {
+        log.info("Deleting document id={}", id);
         Document document = findDocument(id);
         List<DocumentFile> documentFiles = documentFileRepository.findAllByDocument_Id(id);
+        log.info("Deleting document id={} fileCount={}", id, documentFiles.size());
         for (DocumentFile file : documentFiles) {
+            log.info("Deleting document file documentId={} fileId={} path={} storedFileName={}",
+                    id, file.getId(), file.getFilePath(), file.getStoredFileName());
             documentStorageService.deleteFile(file.getFilePath());
         }
         documentStorageService.deleteDocumentFolder(id);
@@ -245,6 +251,7 @@ public class DocumentService {
         documentIndexJobRepository.deleteAllByDocument_Id(id);
         documentFileRepository.deleteAllByDocument_Id(id);
         documentRepository.delete(document);
+        log.info("Document deleted id={}", id);
     }
 
     @Transactional
@@ -261,10 +268,13 @@ public class DocumentService {
     }
 
     public DocumentFileResource getViewContent(UUID documentId) {
+        log.info("Loading view content documentId={}", documentId);
         Document document = refreshTotalPagesIfMissing(findDocument(documentId));
         DocumentFile file = documentFileRepository.findAllByDocument_Id(documentId).stream()
                 .findFirst()
                 .orElseThrow(() -> new ResourceNotFoundException("File not found"));
+        log.info("View content resolved documentId={} fileId={} path={} mimeType={}",
+                documentId, file.getId(), file.getFilePath(), file.getMimeType());
         return toFileResource(document, documentId, file);
     }
 

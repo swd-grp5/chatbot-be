@@ -124,15 +124,20 @@ public class DocumentStorageService {
             throw new ResourceNotFoundException("File not found");
         }
         if (isStoredOnS3(file)) {
+            log.debug("Opening S3 input stream documentId={} key={}", documentId, file.getFilePath());
             return downloadFromS3(file.getFilePath());
         }
         Path path = resolveLocalPath(documentId, file);
+        log.debug("Opening local input stream documentId={} path={}", documentId, path);
         if (!Files.exists(path)) {
+            log.warn("Local file not found documentId={} path={} dbFilePath={}",
+                    documentId, path, file.getFilePath());
             throw new ResourceNotFoundException("File not found on disk");
         }
         try {
             return Files.newInputStream(path);
         } catch (IOException e) {
+            log.error("Failed to open local file documentId={} path={}", documentId, path, e);
             throw new BadRequestException("Failed to read stored file");
         }
     }
@@ -142,23 +147,38 @@ public class DocumentStorageService {
             throw new ResourceNotFoundException("File not found");
         }
         if (isStoredOnS3(file)) {
-            var response = s3Client.getObject(GetObjectRequest.builder()
-                    .bucket(properties.getS3().getBucket())
-                    .key(file.getFilePath())
-                    .build());
-            long fileSize = response.response().contentLength() != null
-                    ? response.response().contentLength()
-                    : file.getFileSize() != null ? file.getFileSize() : 0L;
-            return new ReadableStoredFile(new InputStreamResource(response), fileSize);
+            String objectKey = file.getFilePath();
+            log.debug("Opening S3 readable file documentId={} key={}", documentId, objectKey);
+            try {
+                var response = s3Client.getObject(GetObjectRequest.builder()
+                        .bucket(properties.getS3().getBucket())
+                        .key(objectKey)
+                        .build());
+                long fileSize = response.response().contentLength() != null
+                        ? response.response().contentLength()
+                        : file.getFileSize() != null ? file.getFileSize() : 0L;
+                log.debug("S3 readable file opened documentId={} key={} size={}", documentId, objectKey, fileSize);
+                return new ReadableStoredFile(new InputStreamResource(response), fileSize);
+            } catch (NoSuchKeyException e) {
+                log.warn("S3 object not found documentId={} key={}", documentId, objectKey);
+                throw new ResourceNotFoundException("File not found on S3");
+            } catch (S3Exception e) {
+                logS3Error("getObject", objectKey, e);
+                throw new BadRequestException("Failed to read stored file from S3");
+            }
         }
 
         Path path = resolveLocalPath(documentId, file);
+        log.debug("Opening local readable file documentId={} path={}", documentId, path);
         if (!Files.exists(path)) {
+            log.warn("Local file not found documentId={} path={} dbFilePath={}",
+                    documentId, path, file.getFilePath());
             throw new ResourceNotFoundException("File not found on disk");
         }
         try {
             return new ReadableStoredFile(new FileSystemResource(path), Files.size(path));
         } catch (IOException e) {
+            log.error("Failed to open local readable file documentId={} path={}", documentId, path, e);
             throw new BadRequestException("Failed to read stored file");
         }
     }
@@ -168,14 +188,19 @@ public class DocumentStorageService {
             throw new ResourceNotFoundException("File not found");
         }
         if (isStoredOnS3(file)) {
+            String objectKey = file.getFilePath();
             try {
                 var response = s3Client.headObject(HeadObjectRequest.builder()
                         .bucket(properties.getS3().getBucket())
-                        .key(file.getFilePath())
+                        .key(objectKey)
                         .build());
                 return response.contentLength();
             } catch (NoSuchKeyException e) {
+                log.warn("S3 object not found for headObject documentId={} key={}", documentId, objectKey);
                 throw new ResourceNotFoundException("File not found on S3");
+            } catch (S3Exception e) {
+                logS3Error("headObject", objectKey, e);
+                throw new BadRequestException("Failed to read stored file from S3");
             }
         }
         Path path = resolveLocalPath(documentId, file);
@@ -193,20 +218,27 @@ public class DocumentStorageService {
         if (filePath == null || filePath.isBlank()) {
             return;
         }
-        if (isS3Enabled() && isS3ObjectKey(filePath)) {
+        boolean s3Key = isS3ObjectKey(filePath);
+        log.info("Deleting stored file path={} s3Enabled={} s3Key={}", filePath, isS3Enabled(), s3Key);
+        if (isS3Enabled() && s3Key) {
             deleteFromS3(filePath);
             return;
         }
         try {
-            Files.deleteIfExists(Path.of(filePath));
+            Path localPath = Path.of(filePath);
+            boolean deleted = Files.deleteIfExists(localPath);
+            log.info("Local file delete path={} deleted={}", localPath, deleted);
         } catch (IOException e) {
+            log.error("Failed to delete local file path={}", filePath, e);
             throw new BadRequestException("Failed to delete stored file");
         }
     }
 
     public void deleteDocumentFolder(UUID documentId) {
         if (isS3Enabled()) {
-            deleteS3Prefix(buildDocumentPrefix(documentId));
+            String prefix = buildDocumentPrefix(documentId);
+            log.info("Deleting S3 document prefix documentId={} prefix={}", documentId, prefix);
+            deleteS3Prefix(prefix);
             return;
         }
 
@@ -238,7 +270,10 @@ public class DocumentStorageService {
                 requestBuilder.contentType(contentType);
             }
             s3Client.putObject(requestBuilder.build(), RequestBody.fromBytes(content));
+            log.info("S3 upload succeeded bucket={} key={} bytes={}",
+                    properties.getS3().getBucket(), objectKey, content.length);
         } catch (S3Exception e) {
+            logS3Error("putObject", objectKey, e);
             throw new BadRequestException("Failed to store uploaded file to S3");
         }
     }
@@ -250,34 +285,65 @@ public class DocumentStorageService {
                     .key(objectKey)
                     .build());
         } catch (NoSuchKeyException e) {
+            log.warn("S3 object not found key={}", objectKey);
             throw new ResourceNotFoundException("File not found on S3");
+        } catch (S3Exception e) {
+            logS3Error("getObject", objectKey, e);
+            throw new BadRequestException("Failed to read stored file from S3");
         }
     }
 
     private void deleteFromS3(String objectKey) {
+        String bucket = properties.getS3().getBucket();
+        log.info("S3 delete starting bucket={} key={}", bucket, objectKey);
         try {
             s3Client.deleteObject(DeleteObjectRequest.builder()
-                    .bucket(properties.getS3().getBucket())
+                    .bucket(bucket)
                     .key(objectKey)
                     .build());
+            log.info("S3 delete succeeded bucket={} key={}", bucket, objectKey);
         } catch (S3Exception e) {
+            logS3Error("deleteObject", objectKey, e);
             throw new BadRequestException("Failed to delete stored file from S3");
         }
     }
 
     private void deleteS3Prefix(String prefix) {
+        String bucket = properties.getS3().getBucket();
         String continuationToken = null;
+        int deletedCount = 0;
         do {
-            var listResponse = s3Client.listObjectsV2(ListObjectsV2Request.builder()
-                    .bucket(properties.getS3().getBucket())
-                    .prefix(prefix)
-                    .continuationToken(continuationToken)
-                    .build());
-            for (S3Object object : listResponse.contents()) {
-                deleteFromS3(object.key());
+            ListObjectsV2Request.Builder listRequest = ListObjectsV2Request.builder()
+                    .bucket(bucket)
+                    .prefix(prefix);
+            if (continuationToken != null) {
+                listRequest.continuationToken(continuationToken);
             }
-            continuationToken = listResponse.isTruncated() ? listResponse.nextContinuationToken() : null;
+            try {
+                var listResponse = s3Client.listObjectsV2(listRequest.build());
+                for (S3Object object : listResponse.contents()) {
+                    deleteFromS3(object.key());
+                    deletedCount++;
+                }
+                continuationToken = listResponse.isTruncated() ? listResponse.nextContinuationToken() : null;
+            } catch (S3Exception e) {
+                logS3Error("listObjectsV2", prefix, e);
+                throw new BadRequestException("Failed to delete stored files from S3");
+            }
         } while (continuationToken != null);
+        log.info("S3 prefix delete completed bucket={} prefix={} objectsDeleted={}", bucket, prefix, deletedCount);
+    }
+
+    private void logS3Error(String operation, String objectKey, S3Exception e) {
+        log.error("S3 {} failed bucket={} key={} status={} awsError={} requestId={} message={}",
+                operation,
+                properties.getS3().getBucket(),
+                objectKey,
+                e.statusCode(),
+                e.awsErrorDetails() != null ? e.awsErrorDetails().errorCode() : "unknown",
+                e.requestId(),
+                e.getMessage(),
+                e);
     }
 
     private boolean isStoredOnS3(DocumentFile file) {
