@@ -63,6 +63,7 @@ public class DocumentService {
     @Transactional
     public List<DocumentResponse> upload(List<DocumentUploadRequest> items, List<MultipartFile> files, String userEmail) {
         List<MultipartFile> validFiles = getValidFiles(files);
+        log.info("[upload] step=validate validFileCount={} userEmail={}", validFiles.size(), userEmail);
         validateUploadFiles(validFiles);
 
         List<DocumentUploadRequest> metadata = normalizeMetadata(items, validFiles.size());
@@ -70,12 +71,15 @@ public class DocumentService {
         User uploadedBy = resolveUploadedBy(userEmail);
 
         validateUploadBatch(subject, validFiles, metadata);
+        log.info("[upload] step=batch-validated subjectId={} uploadedBy={}", subject.getId(), userEmail);
 
         List<DocumentResponse> responses = new ArrayList<>();
         for (int i = 0; i < validFiles.size(); i++) {
             MultipartFile file = validFiles.get(i);
             DocumentUploadRequest item = metadata.get(i);
             String title = resolveTitle(item.getTitle(), List.of(file));
+            log.info("[upload] step=create-document index={} title={} fileName={} fileSize={} contentType={}",
+                    i, title, file.getOriginalFilename(), file.getSize(), file.getContentType());
 
             Document document = Document.builder()
                     .subject(subject)
@@ -91,11 +95,14 @@ public class DocumentService {
                     .build();
 
             document = documentRepository.save(document);
+            log.info("[upload] step=document-saved documentId={} title={}", document.getId(), title);
             saveFiles(document, List.of(file));
             refreshTotalPages(document);
             documentIndexJobService.enqueue(document.getId());
             responses.add(toResponse(document));
+            log.info("[upload] step=completed documentId={} title={}", document.getId(), title);
         }
+        log.info("[upload] step=done uploadedCount={}", responses.size());
         return responses;
     }
 
@@ -383,12 +390,18 @@ public class DocumentService {
             if (file == null || file.isEmpty()) {
                 continue;
             }
+            log.info("[upload] step=saveFiles documentId={} fileName={} fileSize={} contentType={}",
+                    document.getId(), file.getOriginalFilename(), file.getSize(), file.getContentType());
             var stored = documentStorageService.store(document.getId(), file);
+            log.info("[upload] step=store-succeeded documentId={} storedFileName={} filePath={} checksum={}",
+                    document.getId(), stored.storedFileName(), stored.filePath(), stored.checksum());
             if (!seenChecksums.add(stored.checksum())) {
+                log.warn("[upload] step=duplicate-in-batch documentId={} checksum={}", document.getId(), stored.checksum());
                 documentStorageService.deleteFile(stored.filePath());
                 throw new BadRequestException("Duplicate file content in upload request");
             }
             if (documentFileRepository.existsByChecksum(stored.checksum())) {
+                log.warn("[upload] step=duplicate-in-db documentId={} checksum={}", document.getId(), stored.checksum());
                 documentStorageService.deleteFile(stored.filePath());
                 throw new BadRequestException("A file with the same content already exists");
             }
@@ -402,6 +415,7 @@ public class DocumentService {
                     .checksum(stored.checksum())
                     .build();
             documentFileRepository.save(documentFile);
+            log.info("[upload] step=file-record-saved documentId={} fileId={}", document.getId(), documentFile.getId());
         }
     }
 

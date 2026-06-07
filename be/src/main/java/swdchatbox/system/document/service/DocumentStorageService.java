@@ -86,8 +86,11 @@ public class DocumentStorageService {
             throw new BadRequestException("File must not be empty");
         }
 
+        String originalName = file.getOriginalFilename() != null ? file.getOriginalFilename() : file.getName();
+        log.info("[upload] step=store-start documentId={} originalName={} fileSize={} contentType={} s3Enabled={}",
+                documentId, originalName, file.getSize(), file.getContentType(), isS3Enabled());
+
         try {
-            String originalName = file.getOriginalFilename() != null ? file.getOriginalFilename() : file.getName();
             String storedFileName = UUID.randomUUID() + "_" + originalName;
             byte[] content = file.getBytes();
             MessageDigest digest = MessageDigest.getInstance(properties.getChecksumAlgorithm());
@@ -95,18 +98,34 @@ public class DocumentStorageService {
 
             if (isS3Enabled()) {
                 String objectKey = buildObjectKey(documentId, storedFileName);
+                log.info("[upload] step=s3-upload documentId={} bucket={} key={} bytes={} contentType={}",
+                        documentId,
+                        properties.getS3().getBucket(),
+                        objectKey,
+                        content.length,
+                        file.getContentType());
                 uploadToS3(objectKey, content, file.getContentType());
+                log.info("[upload] step=s3-upload-done documentId={} key={}", documentId, objectKey);
                 return new StoredDocumentFile(originalName, storedFileName, objectKey, checksum);
             }
 
+            log.info("[upload] step=local-write documentId={} basePath={}", documentId, basePath);
             Files.createDirectories(basePath.resolve(documentId.toString()));
             Path target = basePath.resolve(documentId.toString()).resolve(storedFileName).normalize();
             if (!target.startsWith(basePath)) {
+                log.error("[upload] step=local-write-invalid-path documentId={} target={}", documentId, target);
                 throw new BadRequestException("Invalid storage path");
             }
             Files.write(target, content);
+            log.info("[upload] step=local-write-done documentId={} path={}", documentId, target);
             return new StoredDocumentFile(originalName, storedFileName, target.toString(), checksum);
+        } catch (BadRequestException e) {
+            log.error("[upload] step=store-failed documentId={} originalName={} reason={}",
+                    documentId, originalName, e.getMessage());
+            throw e;
         } catch (IOException | NoSuchAlgorithmException e) {
+            log.error("[upload] step=store-failed documentId={} originalName={} error={}",
+                    documentId, originalName, e.getMessage(), e);
             throw new BadRequestException("Failed to store uploaded file");
         }
     }
@@ -262,18 +281,24 @@ public class DocumentStorageService {
     }
 
     private void uploadToS3(String objectKey, byte[] content, String contentType) {
+        String bucket = properties.getS3().getBucket();
+        log.info("[upload] step=s3.putObject-start bucket={} key={} bytes={} contentType={} region={}",
+                bucket, objectKey, content.length, contentType, properties.getS3().getRegion());
         try {
             PutObjectRequest.Builder requestBuilder = PutObjectRequest.builder()
-                    .bucket(properties.getS3().getBucket())
+                    .bucket(bucket)
                     .key(objectKey);
             if (contentType != null && !contentType.isBlank()) {
                 requestBuilder.contentType(contentType);
             }
             s3Client.putObject(requestBuilder.build(), RequestBody.fromBytes(content));
-            log.info("S3 upload succeeded bucket={} key={} bytes={}",
-                    properties.getS3().getBucket(), objectKey, content.length);
+            log.info("[upload] step=s3.putObject-done bucket={} key={} bytes={}", bucket, objectKey, content.length);
         } catch (S3Exception e) {
             logS3Error("putObject", objectKey, e);
+            throw new BadRequestException("Failed to store uploaded file to S3");
+        } catch (RuntimeException e) {
+            log.error("[upload] step=s3.putObject-failed bucket={} key={} errorType={} message={}",
+                    bucket, objectKey, e.getClass().getName(), e.getMessage(), e);
             throw new BadRequestException("Failed to store uploaded file to S3");
         }
     }

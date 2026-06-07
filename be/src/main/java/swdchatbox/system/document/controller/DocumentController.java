@@ -5,6 +5,7 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.Resource;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -35,6 +36,7 @@ import java.util.UUID;
 @RequestMapping("/documents")
 @RequiredArgsConstructor
 @SecurityRequirement(name = "bearerAuth")
+@Slf4j
 public class DocumentController {
 
     private final DocumentService documentService;
@@ -49,6 +51,20 @@ public class DocumentController {
             Authentication authentication
     ) {
         String userEmail = authentication != null ? authentication.getName() : null;
+        int fileCount = files != null ? files.size() : 0;
+        int dataCount = data != null ? data.size() : 0;
+        log.info("[upload] step=controller userEmail={} fileCount={} dataCount={}", userEmail, fileCount, dataCount);
+        if (files != null) {
+            for (int i = 0; i < files.size(); i++) {
+                MultipartFile file = files.get(i);
+                if (file == null) {
+                    log.warn("[upload] step=controller file[{}]=null", i);
+                    continue;
+                }
+                log.info("[upload] step=controller file[{}] name={} size={} contentType={} empty={}",
+                        i, file.getOriginalFilename(), file.getSize(), file.getContentType(), file.isEmpty());
+            }
+        }
         return ResponseEntity.ok(documentService.upload(data, files, userEmail));
     }
 
