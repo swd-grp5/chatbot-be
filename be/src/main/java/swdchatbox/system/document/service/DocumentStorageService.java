@@ -183,7 +183,7 @@ public class DocumentStorageService {
                 throw new ResourceNotFoundException("File not found on S3");
             } catch (S3Exception e) {
                 logS3Error("getObject", objectKey, e);
-                throw new BadRequestException("Failed to read stored file from S3");
+                throw new BadRequestException(s3ErrorMessage("Failed to read stored file from S3", objectKey, e));
             }
         }
 
@@ -295,11 +295,11 @@ public class DocumentStorageService {
             log.info("[upload] step=s3.putObject-done bucket={} key={} bytes={}", bucket, objectKey, content.length);
         } catch (S3Exception e) {
             logS3Error("putObject", objectKey, e);
-            throw new BadRequestException("Failed to store uploaded file to S3");
+            throw new BadRequestException(s3ErrorMessage("Failed to store uploaded file to S3", objectKey, e));
         } catch (RuntimeException e) {
             log.error("[upload] step=s3.putObject-failed bucket={} key={} errorType={} message={}",
                     bucket, objectKey, e.getClass().getName(), e.getMessage(), e);
-            throw new BadRequestException("Failed to store uploaded file to S3");
+            throw new BadRequestException("Failed to store uploaded file to S3: " + e.getClass().getSimpleName() + " - " + e.getMessage());
         }
     }
 
@@ -314,7 +314,7 @@ public class DocumentStorageService {
             throw new ResourceNotFoundException("File not found on S3");
         } catch (S3Exception e) {
             logS3Error("getObject", objectKey, e);
-            throw new BadRequestException("Failed to read stored file from S3");
+            throw new BadRequestException(s3ErrorMessage("Failed to read stored file from S3", objectKey, e));
         }
     }
 
@@ -329,7 +329,7 @@ public class DocumentStorageService {
             log.info("S3 delete succeeded bucket={} key={}", bucket, objectKey);
         } catch (S3Exception e) {
             logS3Error("deleteObject", objectKey, e);
-            throw new BadRequestException("Failed to delete stored file from S3");
+            throw new BadRequestException(s3ErrorMessage("Failed to delete stored file from S3", objectKey, e));
         }
     }
 
@@ -369,6 +369,15 @@ public class DocumentStorageService {
                 e.requestId(),
                 e.getMessage(),
                 e);
+    }
+
+    private String s3ErrorMessage(String action, String objectKey, S3Exception e) {
+        String awsError = e.awsErrorDetails() != null ? e.awsErrorDetails().errorCode() : "unknown";
+        return action + ": bucket=" + properties.getS3().getBucket()
+                + " key=" + objectKey
+                + " awsError=" + awsError
+                + " status=" + e.statusCode()
+                + " requestId=" + e.requestId();
     }
 
     private boolean isStoredOnS3(DocumentFile file) {
