@@ -1,24 +1,23 @@
 package swdchatbox.system.subscription.dto.response;
 
-import lombok.Builder;
-
+import lombok.*;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
 @Builder
-public record StudentSubscriptionResponse(
-        UUID id,
-        UUID subjectId,
-        String subjectCode,
-        String subjectName,
-        Boolean active,
-        LocalDateTime subscribedAt,
-        LocalDateTime unsubscribedAt,
-        LocalDateTime createdAt,
-        LocalDateTime updatedAt
-) {
+public class StudentSubscriptionResponse {
+    private UUID id;
+    private UUID planId;
+    private String planName;
+    private Integer dailyQuestionLimit;
+    private Boolean active;
+    private LocalDateTime subscribedAt;
+    private LocalDateTime expiresAt; // Thêm ngày hết hạn gói
+    private LocalDateTime unsubscribedAt;
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
 }
-
-
-//dong nay de push
-
