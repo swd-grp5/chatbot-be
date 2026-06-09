@@ -1,33 +1,30 @@
-name: swdchatbox
-
 services:
-  mysql:
+  db:
     image: mysql:8.4
-    container_name: swdchatbox
-
-    restart: unless-stopped
-
-    env_file:
-      - .env
-
+    container_name: swdchatbox-db
+    restart: always
     environment:
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: swdchatbox
     ports:
-      - "${MYSQL_PORT}:3306"
-
+      - "3307:3306"
     volumes:
-      - swdchatbox:/var/lib/mysql
-      - ./docker/mysql/init:/docker-entrypoint-initdb.d
+      - mysql_data:/var/lib/mysql
 
-    command:
-      [
-        "--character-set-server=utf8mb4",
-        "--collation-server=utf8mb4_unicode_ci"
-      ]
+  backend:
+    build:
+      context: ./be
+      dockerfile: ../Dockerfile
+    container_name: swdchatbox-chatbot-be
+    restart: always
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:mysql://db:3306/swdchatbox?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true
+      - SPRING_DATASOURCE_USERNAME=root
+      - SPRING_DATASOURCE_PASSWORD=root
 
 volumes:
-  swdchatbox:
+  mysql_data:
