@@ -57,7 +57,7 @@ class StudentSubscriptionServiceTest {
         StudentSubscription saved = StudentSubscription.builder()
                 .id(UUID.randomUUID())
                 .student(student)
-                .subject(subject)
+                .subscriptionPlan(plan)
                 .active(true)
                 .subscribedAt(LocalDateTime.now())
                 .createdAt(LocalDateTime.now())
