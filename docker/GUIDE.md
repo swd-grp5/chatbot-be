@@ -1,195 +1,131 @@
-# Hướng dẫn chạy MySQL bằng Docker (SWDChatBox)
+# Deploy Spring BE bằng Docker Compose
 
-Project này dùng **Docker Compose** để chạy **MySQL 8.4** local cho backend.
+Stack này chạy **API Spring Boot (cổng 8080)**. **Không** chạy MySQL — DB phải có sẵn (VPS, Portainer stack khác, managed DB).
 
-> Chạy các lệnh bên dưới tại **thư mục gốc repo** (nơi có `docker-compose.yml`).
+> Chạy lệnh tại **thư mục gốc repo** (`chatbot-be`, có `docker-compose.yml`).
 
 ---
 
 ## Yêu cầu
 
-- Docker Desktop
-- Java 17+
-- Maven (hoặc chạy bằng IDE)
-
-Kiểm tra Docker:
-
-```bash
-docker --version
-docker compose version
-```
+- Docker / Portainer có quyền build image
+- MySQL đã chạy và cho phép kết nối từ host/container BE
 
 ---
 
-## Cấu trúc liên quan
+## Cấu trúc
 
 ```txt
-SWDChatBox/
-├── docker-compose.yml
+chatbot-be/
+├── docker-compose.yml   # service be → :8080
 ├── .env.example
-└── docker/
-    └── mysql/
-        └── init/
-            └── 01-init.sql
+└── be/
+    └── Dockerfile
 ```
 
 ---
 
-## Thiết lập lần đầu
+## Biến môi trường
 
-### 1) Tạo file môi trường `.env`
+| Biến | Bắt buộc | Mô tả |
+|------|----------|--------|
+| `MYSQL_HOST` | Có | IP/hostname MySQL (vd. IP VPS) |
+| `MYSQL_PASSWORD` | Có | Mật khẩu user DB |
+| `JWT_SECRET` | Có | Secret JWT |
+| `MYSQL_PORT` | Không (3306) | Cổng MySQL |
+| `MYSQL_DATABASE` | Không | Tên database |
+| `MYSQL_USER` | Không | User DB |
+| `SPRING_PORT` | Không (8080) | Cổng **host** map vào API |
+| `GOOGLE_CLIENT_ID`, `MAIL_*`, `CORS_*`, `APP_PUBLIC_URL` | Tùy tính năng | Xem `.env.example` |
 
-Mac/Linux:
+Compose **không** dùng `env_file` (tránh lỗi Portainer thiếu `.env`).
 
-```bash
-cp .env.example .env
-```
-
-Windows (PowerShell):
+### Local
 
 ```powershell
 Copy-Item .env.example .env
+# Điền MYSQL_HOST, MYSQL_PASSWORD, JWT_SECRET, ...
+docker compose up -d --build
 ```
 
-### 2) Cấu hình MySQL trong `.env`
+API: `http://localhost:8080` — health: `GET /api/health`
 
-Ví dụ:
+### Portainer
+
+**Stack → Environment variables** — tối thiểu:
 
 ```env
+MYSQL_HOST=168.144.98.120
+MYSQL_PORT=3306
 MYSQL_DATABASE=swdchatbox
 MYSQL_USER=swd_user
-MYSQL_PASSWORD=your_password_here
-MYSQL_ROOT_PASSWORD=your_root_password_here
-MYSQL_PORT=3307
+MYSQL_PASSWORD=...
+JWT_SECRET=...
+SPRING_PORT=8080
+GOOGLE_CLIENT_ID=...
+CORS_ALLOWED_ORIGINS=http://168.144.98.120:5173,https://your-fe.com
+APP_PUBLIC_URL=http://168.144.98.120:8080
+VERIFY_BASE_URL=http://168.144.98.120:8080
 ```
+
+Redeploy stack (**bật build** — image không pull từ Docker Hub).
+
+Upload tài liệu lưu volume `be-uploads` → `/app/uploads` trong container.
+
+#### Lỗi `pull access denied for swdchatbox-be`
+
+Image `swdchatbox-be:latest` **chỉ tạo sau khi build** trên VPS, không public trên Hub.
+
+- Compose đã có `pull_policy: build` — update stack với YAML mới.
+- Portainer: deploy từ **Git/repo đủ thư mục `be/`** (có `Dockerfile`, `pom.xml`, `src/`).
+- Lần deploy: chọn **Build** / **Re-pull and redeploy** có build (Compose v2+).
+- Nếu vẫn pull fail: SSH vào VPS, trong thư mục repo chạy  
+  `docker compose build be && docker compose up -d`.
+
+#### Stack Git trên Portainer
+
+Web editor phải trỏ repo root `chatbot-be`, không chỉ paste mỗi file yaml.
 
 ---
 
-## Chạy / dừng database
-
-### Chạy MySQL
+## Lệnh hay dùng
 
 ```bash
-docker compose up -d
-```
-
-### Xem log
-
-```bash
-docker logs -f swdchatbox
-```
-
-### Dừng MySQL (giữ nguyên data)
-
-```bash
+docker compose logs -f be
 docker compose down
-```
-
----
-
-## 1 lệnh xoá sạch volume data DB (mất toàn bộ dữ liệu)
-
-> Volume đang dùng trong `docker-compose.yml` là `swdchatbox`.
-
-```bash
-docker compose down -v --remove-orphans
-```
-
-Lệnh này sẽ xoá container + **volume data** (tức là DB sạch 100%).
-
----
-
-## 1 lệnh khởi tạo lại DB (tạo DB mới từ đầu)
-
-```bash
-docker compose up -d --force-recreate
-```
-
-Lưu ý:
-- Nếu bạn vừa xoá volume ở bước trên thì `up` sẽ tạo một MySQL “fresh” và chạy script init trong `docker/mysql/init/`.
-
----
-
-## Kết nối DB từ IntelliJ / DataGrip
-
-Thông tin kết nối (dựa theo `.env`):
-
-```txt
-Host: localhost
-Port: 3307
-Database: swdchatbox
-Username: swd_user
-Password: your_password_here
-```
-
----
-
-## Các lệnh hay dùng
-
-### Xem container đang chạy
-
-```bash
-docker ps
-```
-
-### Xem volumes
-
-```bash
-docker volume ls
-```
-
-### Xoá volume thủ công (nếu cần)
-
-```bash
-docker volume rm swdchatbox
-```
-
-### Vào MySQL container
-
-```bash
-docker exec -it swdchatbox bash
-```
-
-Đăng nhập MySQL (root password lấy từ `.env`):
-
-```bash
-mysql -u root -p
+docker compose up -d --build
 ```
 
 ---
 
 ## Troubleshooting
 
-### Port bị chiếm
+### `pull access denied for swdchatbox-be`
 
-Nếu gặp lỗi kiểu:
+Không login Docker Hub được — bình thường vì image **chưa build**. Build trên server (xem mục Portainer trên), không `docker pull swdchatbox-be`.
 
-```txt
-Bind for 0.0.0.0:3307 failed
-```
+### `Bind for 0.0.0.0:8080 failed: port is already allocated`
 
-Sửa `.env` ví dụ:
+Đổi `SPRING_PORT=8081` (hoặc cổng trống) trong stack env, redeploy.
 
-```env
-MYSQL_PORT=3308
-```
+### `Bind for 0.0.0.0:3306` khi deploy stack DB
 
-Rồi chạy lại:
+Đó là stack **MySQL riêng**, không phải file compose BE này. BE chỉ cần `MYSQL_HOST` + `MYSQL_PORT` trỏ DB đó.
 
-```bash
-docker compose down
-docker compose up -d
-```
+### BE không connect DB
 
-### Backend không connect được DB
-
-Checklist nhanh:
-- Container `swdchatbox` đang chạy (`docker ps`)
-- Thông tin `.env` khớp với `be/src/main/resources/application.properties`
-- Port đúng (`MYSQL_PORT`)
+- `MYSQL_HOST` reachable từ container (firewall, user `%` / IP cho phép)
+- User/password/database đúng
+- Nếu MySQL trên **cùng VPS**: có thể dùng IP VPS hoặc IP bridge Docker của container MySQL
 
 ---
 
-## Lưu ý bảo mật
+## MySQL local (tùy chọn, không trong compose BE)
+
+Script init: `docker/mysql/init/`. Có thể chạy MySQL thủ công hoặc stack DB riêng trên Portainer, rồi trỏ `MYSQL_HOST` vào đó.
+
+---
+
+## Bảo mật
 
 Không commit `.env`. Chỉ commit `.env.example`.

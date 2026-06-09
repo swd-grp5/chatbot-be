@@ -12,11 +12,8 @@ public final class DocumentFileMapper {
         return DocumentFileResponse.builder()
                 .id(file.getId())
                 .originalFileName(file.getOriginalFileName())
-                .storedFileName(file.getStoredFileName())
-                .filePath(file.getFilePath())
                 .mimeType(file.getMimeType())
                 .fileSize(file.getFileSize())
-                .checksum(file.getChecksum())
                 .createdAt(file.getCreatedAt())
                 .build();
     }

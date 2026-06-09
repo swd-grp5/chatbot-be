@@ -150,6 +150,14 @@ public class GlobalExceptionHandler {
             Exception ex,
             HttpServletRequest request
     ) {
+        log.error(
+                "Unhandled exception at path={} type={} message={}",
+                request.getRequestURI(),
+                ex.getClass().getName(),
+                ex.getMessage(),
+                ex
+        );
+
         ApiErrorResponse body = ApiErrorResponse.builder()
                 .timestamp(Instant.now())
                 .status(HttpStatus.INTERNAL_SERVER_ERROR.value())

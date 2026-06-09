@@ -4,14 +4,14 @@ import org.apache.tika.Tika;
 import org.apache.tika.exception.TikaException;
 import org.springframework.stereotype.Service;
 import swdchatbox.system.common.exception.BadRequestException;
+import swdchatbox.system.common.exception.ResourceNotFoundException;
 import swdchatbox.system.document.entity.Document;
 import swdchatbox.system.document.entity.DocumentFile;
-import swdchatbox.system.document.enums.DocumentType;
 import swdchatbox.system.document.repository.DocumentFileRepository;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.StringJoiner;
 
@@ -19,10 +19,15 @@ import java.util.StringJoiner;
 public class DocumentExtractionService {
 
     private final DocumentFileRepository documentFileRepository;
+    private final DocumentStorageService documentStorageService;
     private final Tika tika = new Tika();
 
-    public DocumentExtractionService(DocumentFileRepository documentFileRepository) {
+    public DocumentExtractionService(
+            DocumentFileRepository documentFileRepository,
+            DocumentStorageService documentStorageService
+    ) {
         this.documentFileRepository = documentFileRepository;
+        this.documentStorageService = documentStorageService;
     }
 
     public String extract(Document document) {
@@ -33,22 +38,19 @@ public class DocumentExtractionService {
 
         StringJoiner joiner = new StringJoiner(System.lineSeparator() + System.lineSeparator());
         for (DocumentFile file : files) {
-            joiner.add(extractFile(file));
+            joiner.add(extractFile(document.getId(), file));
         }
         return joiner.toString().trim();
     }
 
-    private String extractFile(DocumentFile file) {
-        Path path = Path.of(file.getFilePath());
-        if (!Files.exists(path)) {
-            return "";
-        }
-
-        try {
+    private String extractFile(java.util.UUID documentId, DocumentFile file) {
+        try (InputStream inputStream = documentStorageService.openInputStream(documentId, file)) {
             if (isPlainText(file.getMimeType(), file.getOriginalFileName())) {
-                return Files.readString(path);
+                return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
             }
-            return tika.parseToString(path);
+            return tika.parseToString(inputStream);
+        } catch (ResourceNotFoundException e) {
+            return "";
         } catch (IOException | TikaException e) {
             throw new BadRequestException("Failed to extract text from file: " + file.getOriginalFileName());
         }

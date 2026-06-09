@@ -121,7 +121,7 @@ public class EmailVerificationService {
         }
 
         if (from == null || from.isBlank()) {
-            throw new RuntimeException("Mail config error: app.mail.from is empty. Check MAIL_FROM.");
+            throw new RuntimeException("Mail config error: app.mail.from is empty. Check SPRING_MAIL_FROM.");
         }
 
         Map<String, Object> payload = new LinkedHashMap<>();

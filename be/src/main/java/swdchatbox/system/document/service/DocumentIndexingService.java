@@ -23,6 +23,7 @@ public class DocumentIndexingService {
     private final DocumentChunkRepository documentChunkRepository;
     private final DocumentChunkingService documentChunkingService;
     private final DocumentExtractionService documentExtractionService;
+    private final DocumentPageCountService documentPageCountService;
     private final DocumentIndexJobRepository documentIndexJobRepository;
     private final DocumentIndexJobService documentIndexJobService;
 
@@ -60,6 +61,7 @@ public class DocumentIndexingService {
 
         document.setExtractedText(extractedText);
         document.setTotalChunks(chunks.size());
+        document.setTotalPages(documentPageCountService.countDocumentPages(documentId));
         document.setStatus(swdchatbox.system.document.enums.DocumentStatus.INDEXED);
         return documentRepository.save(document);
     }

@@ -5,12 +5,15 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.Resource;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import swdchatbox.system.document.dto.request.DocumentFilterRequest;
@@ -19,16 +22,13 @@ import swdchatbox.system.document.dto.request.DocumentUploadRequest;
 import swdchatbox.system.document.dto.response.DocumentChunkResponse;
 import swdchatbox.system.document.dto.response.DocumentDashboardStatsResponse;
 import swdchatbox.system.document.dto.response.DocumentIndexStatusResponse;
+import swdchatbox.system.document.dto.response.DocumentViewResponse;
 import swdchatbox.system.common.dto.PageResponse;
 import swdchatbox.system.document.dto.response.DocumentResponse;
-import swdchatbox.system.document.entity.DocumentFile;
 import swdchatbox.system.document.enums.DocumentType;
-import swdchatbox.system.document.repository.DocumentFileRepository;
 import swdchatbox.system.document.service.DocumentIndexingService;
 import swdchatbox.system.document.service.DocumentService;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
 
@@ -36,19 +36,36 @@ import java.util.UUID;
 @RequestMapping("/documents")
 @RequiredArgsConstructor
 @SecurityRequirement(name = "bearerAuth")
+@Slf4j
 public class DocumentController {
 
     private final DocumentService documentService;
     private final DocumentIndexingService documentIndexingService;
-    private final DocumentFileRepository documentFileRepository;
 
-    @Operation(summary = "Upload tài liệu", description = "FE gửi file dạng `multipart/form-data` ở field `files`. Dùng để tạo document mới.")
+    @Operation(summary = "Upload tài liệu", description = "FE gửi `multipart/form-data`: `data` là mảng JSON (title, description), mỗi phần tử tương ứng 1 file trong `files`. Không cho trùng title trong subject và không cho trùng nội dung file.")
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<DocumentResponse> upload(
-            @Parameter(description = "Danh sách file upload")
-            @RequestPart(value = "files", required = false) List<MultipartFile> files
+    public ResponseEntity<List<DocumentResponse>> upload(
+            @Valid @RequestPart(value = "data", required = false) List<DocumentUploadRequest> data,
+            @Parameter(description = "Danh sách file upload, thứ tự khớp với mảng data")
+            @RequestPart(value = "files", required = false) List<MultipartFile> files,
+            Authentication authentication
     ) {
-        return ResponseEntity.ok(documentService.upload(new DocumentUploadRequest(), files));
+        String userEmail = authentication != null ? authentication.getName() : null;
+        int fileCount = files != null ? files.size() : 0;
+        int dataCount = data != null ? data.size() : 0;
+        log.info("[upload] step=controller userEmail={} fileCount={} dataCount={}", userEmail, fileCount, dataCount);
+        if (files != null) {
+            for (int i = 0; i < files.size(); i++) {
+                MultipartFile file = files.get(i);
+                if (file == null) {
+                    log.warn("[upload] step=controller file[{}]=null", i);
+                    continue;
+                }
+                log.info("[upload] step=controller file[{}] name={} size={} contentType={} empty={}",
+                        i, file.getOriginalFilename(), file.getSize(), file.getContentType(), file.isEmpty());
+            }
+        }
+        return ResponseEntity.ok(documentService.upload(data, files, userEmail));
     }
 
     @Operation(summary = "Thống kê tài liệu", description = "FE dùng để hiển thị số liệu dashboard như tổng document, ready, processing, failed.")
@@ -57,11 +74,11 @@ public class DocumentController {
         return ResponseEntity.ok(documentService.getStats());
     }
 
-    @Operation(summary = "Lấy trạng thái index", description = "FE dùng để kiểm tra document đã được index hay chưa trước khi hiển thị nội dung search/chunk.")
-    @GetMapping("/{id}/index-status")
-    public ResponseEntity<DocumentIndexStatusResponse> indexStatus(@PathVariable UUID id) {
-        return ResponseEntity.ok(documentService.getIndexStatus(id));
-    }
+//    @Operation(summary = "Lấy trạng thái index", description = "FE dùng để kiểm tra document đã được index hay chưa trước khi hiển thị nội dung search/chunk.")
+//    @GetMapping("/{id}/index-status")
+//    public ResponseEntity<DocumentIndexStatusResponse> indexStatus(@PathVariable UUID id) {
+//        return ResponseEntity.ok(documentService.getIndexStatus(id));
+//    }
 
     @Operation(summary = "Lấy danh sách chunks", description = "FE dùng để xem các đoạn nội dung đã index của document.")
     @GetMapping("/{id}/chunks")
@@ -97,36 +114,31 @@ public class DocumentController {
         return ResponseEntity.ok(documentService.findAll(filter, pageable));
     }
 
-    @Operation(summary = "Lấy chi tiết tài liệu", description = "FE dùng khi mở trang chi tiết document hoặc đổ dữ liệu vào form chỉnh sửa.")
+    @Operation(summary = "Lấy chi tiết tài liệu", description = "FE dùng khi mở trang chi tiết document")
     @GetMapping("/{id}")
     public ResponseEntity<DocumentResponse> getById(@PathVariable UUID id) {
         return ResponseEntity.ok(documentService.findById(id));
     }
 
-    @Operation(summary = "Tải xuống file gốc của tài liệu", description = "FE dùng để tải file đầu tiên/gốc của document. Response trả về binary file.")
-    @GetMapping("/{id}/download")
-    public ResponseEntity<byte[]> downloadDocument(@PathVariable UUID id) throws Exception {
-        DocumentFile file = documentFileRepository.findAllByDocument_Id(id).stream().findFirst()
-                .orElseThrow(() -> new RuntimeException("File not found"));
-        byte[] content = Files.readAllBytes(Path.of(file.getFilePath()));
-        return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.getOriginalFileName() + "\"")
-                .contentType(MediaType.parseMediaType(file.getMimeType() != null ? file.getMimeType() : MediaType.APPLICATION_OCTET_STREAM_VALUE))
-                .body(content);
+    @Operation(summary = "Thông tin xem tài liệu", description = "FE dùng để mở màn viewer: lấy title, totalPages, mimeType trước khi gọi `/view` hiển thị file.")
+    @GetMapping("/{id}/viewer")
+    public ResponseEntity<DocumentViewResponse> viewer(@PathVariable UUID id) {
+        return ResponseEntity.ok(documentService.getViewerInfo(id));
     }
 
-    @Operation(summary = "Tải xuống file theo fileId", description = "FE dùng khi document có nhiều file và muốn tải đúng file con theo `documentId` + `fileId`.")
-    @GetMapping("/{documentId}/files/{fileId}/download")
-    public ResponseEntity<byte[]> downloadFile(@PathVariable UUID documentId, @PathVariable UUID fileId) throws Exception {
-        DocumentFile file = documentFileRepository.findById(fileId)
-                .filter(f -> f.getDocument() != null && f.getDocument().getId().equals(documentId))
-                .orElseThrow(() -> new RuntimeException("File not found"));
-        byte[] content = Files.readAllBytes(Path.of(file.getFilePath()));
-        return ResponseEntity.ok()
-                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.getOriginalFileName() + "\"")
-                .contentType(MediaType.parseMediaType(file.getMimeType() != null ? file.getMimeType() : MediaType.APPLICATION_OCTET_STREAM_VALUE))
-                .body(content);
+    @Operation(summary = "Xem file tài liệu", description = "FE dùng để hiển thị file trực tiếp trên trình duyệt (PDF viewer). Trả file dạng inline, kết hợp với `totalPages` từ `/viewer`.")
+    @GetMapping("/{id}/view")
+    public ResponseEntity<Resource> viewDocument(@PathVariable UUID id) {
+        return buildFileResponse(documentService.getViewContent(id), false);
     }
+
+
+    @Operation(summary = "Tải xuống file gốc của tài liệu", description = "FE dùng khi user muốn tải file về máy. Response trả về binary file dạng attachment.")
+    @GetMapping("/{id}/download")
+    public ResponseEntity<Resource> downloadDocument(@PathVariable UUID id) {
+        return buildFileResponse(documentService.getDownloadContent(id), true);
+    }
+
 
     @Operation(summary = "Index lại tài liệu", description = "FE dùng khi cần reprocess/reindex document sau upload hoặc sau khi cập nhật file.")
     @PostMapping("/{id}/reindex")
@@ -140,30 +152,51 @@ public class DocumentController {
         return ResponseEntity.ok(documentService.toggleActive(id));
     }
 
-    @Operation(summary = "Cập nhật tài liệu", description = "FE gửi dữ liệu cập nhật ở field `data` và file mới ở field `files` nếu có. Request là multipart/form-data.")
-    @PutMapping(value = "/{id}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Cập nhật tài liệu", description = "FE gửi JSON để sửa title, description và active. Upload file mới dùng `POST /{id}/files`.")
+    @PutMapping("/{id}")
     public ResponseEntity<DocumentResponse> update(
             @PathVariable UUID id,
-            @Valid @RequestPart("data") DocumentUpdateRequest request,
-            @Parameter(description = "Danh sách file mới") @RequestPart(value = "files", required = false) List<MultipartFile> files
+            @Valid @RequestBody DocumentUpdateRequest request
     ) {
-        return ResponseEntity.ok(documentService.update(id, request, files));
+        return ResponseEntity.ok(documentService.update(id, request));
     }
 
-    @Operation(summary = "Thêm file vào tài liệu", description = "FE dùng khi document đã có sẵn và muốn upload thêm file con. Gửi multipart/form-data ở field `files`.")
-    @PostMapping(value = "/{id}/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<DocumentResponse> addFiles(
-            @PathVariable UUID id,
-            @Parameter(description = "Danh sách file cần thêm") @RequestPart("files") List<MultipartFile> files
-    ) {
-        return ResponseEntity.ok(documentService.addFiles(id, files));
-    }
+//    @Operation(summary = "Thêm file vào tài liệu", description = "FE dùng khi document đã có sẵn và muốn upload thêm file con. Gửi multipart/form-data ở field `files`.")
+//    @PostMapping(value = "/{id}/files", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+//    public ResponseEntity<DocumentResponse> addFiles(
+//            @PathVariable UUID id,
+//            @Parameter(description = "Danh sách file cần thêm") @RequestPart("files") List<MultipartFile> files
+//    ) {
+//        return ResponseEntity.ok(documentService.addFiles(id, files));
+//    }
 
     @Operation(summary = "Xóa tài liệu", description = "FE dùng để xóa document theo id. Sau khi xóa sẽ trả về HTTP 204.")
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable UUID id) {
         documentService.delete(id);
         return ResponseEntity.noContent().build();
+    }
+
+    private ResponseEntity<Resource> buildFileResponse(DocumentService.DocumentFileResource file, boolean attachment) {
+        String dispositionType = attachment ? "attachment" : "inline";
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, dispositionType + "; filename=\"" + file.originalFileName() + "\"")
+                .header("X-Total-Pages", String.valueOf(file.totalPages()))
+                .contentType(resolveMediaType(file.mimeType()))
+                .contentLength(file.fileSize())
+                .body(file.resource());
+    }
+
+    private MediaType resolveMediaType(String mimeType) {
+        if (mimeType == null || mimeType.isBlank()) {
+            return MediaType.APPLICATION_OCTET_STREAM;
+        }
+        try {
+            return MediaType.parseMediaType(mimeType);
+        } catch (Exception ignored) {
+            return MediaType.APPLICATION_OCTET_STREAM;
+        }
     }
 
     private Sort resolveSort(String sortBy, String sortDir) {
