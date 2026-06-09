@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
+import swdchatbox.system.subject.entity.Subject;
 import swdchatbox.system.user.entity.User;
 
 import java.time.LocalDateTime;
@@ -12,8 +13,12 @@ import java.util.UUID;
 @Entity
 @Table(
         name = "student_subscriptions",
+        uniqueConstraints = {
+                @UniqueConstraint(name = "uk_student_subject_subscription", columnNames = {"student_id", "subject_id"})
+        },
         indexes = {
                 @Index(name = "idx_student_subscription_student", columnList = "student_id"),
+                @Index(name = "idx_student_subscription_subject", columnList = "subject_id"),
                 @Index(name = "idx_student_subscription_active", columnList = "active")
         }
 )
@@ -32,29 +37,23 @@ public class StudentSubscription {
     @JoinColumn(name = "student_id", nullable = false)
     private User student;
 
-    // 🚀 ĐỔI TỪ SUBJECT SANG SUBSCRIPTION PLAN Ở ĐÂY
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "subscription_plan_id", nullable = false)
-    private SubscriptionPlan subscriptionPlan;
+    @JoinColumn(name = "subject_id", nullable = false)
+    private Subject subject;
 
     @Column(nullable = false)
     private Boolean active = true;
 
-    @Column(name = "subscribed_at", nullable = false)
+    @Column(nullable = false)
     private LocalDateTime subscribedAt;
 
-    // 🚀 BỔ SUNG NGÀY HẾT HẠN ĐỂ SERVICE GỌI ĐƯỢC HÀM GETTER
-    @Column(name = "expires_at", nullable = false)
-    private LocalDateTime expiresAt;
-
-    @Column(name = "unsubscribed_at")
     private LocalDateTime unsubscribedAt;
 
     @CreationTimestamp
-    @Column(name = "created_at", updatable = false)
+    @Column(updatable = false)
     private LocalDateTime createdAt;
 
     @UpdateTimestamp
-    @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 }
+

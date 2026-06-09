@@ -1,24 +1,19 @@
 package swdchatbox.system.subscription.service;
 
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import swdchatbox.system.common.exception.BadRequestException;
 import swdchatbox.system.common.exception.ResourceNotFoundException;
+import swdchatbox.system.document.entity.Subject;
+import swdchatbox.system.document.repository.SubjectRepository;
 import swdchatbox.system.subscription.dto.response.StudentSubscriptionResponse;
 import swdchatbox.system.subscription.entity.StudentSubscription;
-import swdchatbox.system.subscription.entity.SubscriptionPlan;
 import swdchatbox.system.subscription.repository.StudentSubscriptionRepository;
-import swdchatbox.system.subscription.repository.SubscriptionPlanRepository;
 import swdchatbox.system.user.entity.User;
 import swdchatbox.system.user.enums.UserRole;
 import swdchatbox.system.user.repository.UserRepository;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -28,143 +23,61 @@ import java.util.UUID;
 public class StudentSubscriptionService {
 
     private final StudentSubscriptionRepository subscriptionRepository;
-    private final SubscriptionPlanRepository subscriptionPlanRepository;
     private final UserRepository userRepository;
+    private final SubjectRepository subjectRepository;
 
-    /**
-     * 🚀 CẬP NHẬT: Đăng ký gói cước VIP hệ thống (Thay vì môn học)
-     */
     @Transactional
-    public StudentSubscriptionResponse subscribe(UUID planId, String email) {
+    public StudentSubscriptionResponse subscribe(UUID subjectId, String email) {
         User student = findStudentByEmail(email);
-        SubscriptionPlan plan = subscriptionPlanRepository.findById(planId)
-                .orElseThrow(() -> new ResourceNotFoundException("Subscription plan not found"));
+        Subject subject = findSubject(subjectId);
 
-        if (!Boolean.TRUE.equals(plan.getActive())) {
-            throw new BadRequestException("This subscription plan is currently inactive");
-        }
-
-        // Tìm xem user đang có gói nào active không
-        StudentSubscription activeSub = subscriptionRepository
-                .findActiveSubscription(student.getId(), LocalDateTime.now())
+        StudentSubscription subscription = subscriptionRepository
+                .findByStudent_IdAndSubject_Id(student.getId(), subjectId)
                 .orElse(null);
 
-        if (activeSub != null) {
-            // Nếu đang dùng chính gói này và còn hạn thì báo lỗi
-            if (activeSub.getSubscriptionPlan().getId().equals(planId)) {
-                throw new BadRequestException("You already have an active subscription to this plan");
-            }
-            // Nếu đổi gói khác (Nâng cấp/Hạ cấp), chủ động hủy gói cũ trước
-            activeSub.setActive(false);
-            activeSub.setUnsubscribedAt(LocalDateTime.now());
-            subscriptionRepository.save(activeSub);
+        if (subscription == null) {
+            subscription = StudentSubscription.builder()
+                    .student(student)
+                    .subject(subject)
+                    .active(true)
+                    .subscribedAt(LocalDateTime.now())
+                    .build();
+        } else if (Boolean.TRUE.equals(subscription.getActive())) {
+            throw new BadRequestException("You already subscribed to this subject");
+        } else {
+            subscription.setActive(true);
+            subscription.setSubscribedAt(LocalDateTime.now());
+            subscription.setUnsubscribedAt(null);
         }
-
-        // Tạo chu kỳ đăng ký mới
-        LocalDateTime subscribedAt = LocalDateTime.now();
-        LocalDateTime expiresAt = subscribedAt.plusMonths(plan.getDurationInMonths());
-
-        StudentSubscription subscription = StudentSubscription.builder()
-                .student(student)
-                .subscriptionPlan(plan)
-                .active(true)
-                .subscribedAt(subscribedAt)
-                .expiresAt(expiresAt)
-                .build();
 
         return toResponse(subscriptionRepository.save(subscription));
     }
 
-    /**
-     * 🚀 CẬP NHẬT: Hủy gói cước VIP hiện tại
-     */
     @Transactional
-    public void unsubscribe(String email) {
+    public void unsubscribe(UUID subjectId, String email) {
         User student = findStudentByEmail(email);
 
         StudentSubscription subscription = subscriptionRepository
-                .findActiveSubscription(student.getId(), LocalDateTime.now())
-                .orElseThrow(() -> new ResourceNotFoundException("No active subscription found to unsubscribe"));
+                .findByStudent_IdAndSubject_Id(student.getId(), subjectId)
+                .orElseThrow(() -> new ResourceNotFoundException("Subscription not found"));
+
+        if (!Boolean.TRUE.equals(subscription.getActive())) {
+            throw new BadRequestException("Subscription is already inactive");
+        }
 
         subscription.setActive(false);
         subscription.setUnsubscribedAt(LocalDateTime.now());
         subscriptionRepository.save(subscription);
     }
 
-    /**
-     * 🚀 YÊU CẦU 1: API Lấy gói người dùng đang có (Mặc định lấy "Free" từ Master SQL của bạn)
-     */
     @Transactional(readOnly = true)
-    public SubscriptionPlan getCurrentUserPlan(String email) {
+    public List<StudentSubscriptionResponse> findMySubscriptions(String email, Boolean active) {
         User student = findStudentByEmail(email);
 
-        return subscriptionRepository.findActiveSubscription(student.getId(), LocalDateTime.now())
-                .map(StudentSubscription::getSubscriptionPlan)
-                .orElseGet(() -> subscriptionPlanRepository.findByNameIgnoreCase("Free")
-                        .orElseGet(() -> SubscriptionPlan.builder()
-                                .name("Free")
-                                .price(BigDecimal.ZERO)
-                                .dailyQuestionLimit(10)
-                                .durationInMonths(999)
-                                .description("Gói miễn phí mặc định")
-                                .active(true)
-                                .build()
-                        )
-                );
-    }
+        List<StudentSubscription> subscriptions = active == null
+                ? subscriptionRepository.findAllByStudent_IdOrderBySubscribedAtDesc(student.getId())
+                : subscriptionRepository.findAllByStudent_IdAndActiveOrderBySubscribedAtDesc(student.getId(), active);
 
-    /**
-     * 🚀 YÊU CẦU 3: Lấy tất cả gói cho ADMIN kèm Phân trang + SORT linh hoạt
-     */
-    @Transactional(readOnly = true)
-    public Page<SubscriptionPlan> getAllPlansForAdmin(int page, int size, String sortBy, String sortDir) {
-        Sort sort = sortDir.equalsIgnoreCase(Sort.Direction.DESC.name())
-                ? Sort.by(sortBy).descending()
-                : Sort.by(sortBy).ascending();
-
-        Pageable pageable = PageRequest.of(page, size, sort);
-        return subscriptionPlanRepository.findAll(pageable);
-    }
-
-    /**
-     * 🚀 YÊU CẦU 2: Admin quản lý gói cước (CRUD)
-     */
-    @Transactional
-    public SubscriptionPlan createPlan(SubscriptionPlan plan) {
-        if (subscriptionPlanRepository.findByNameIgnoreCase(plan.getName()).isPresent()) {
-            throw new BadRequestException("Subscription plan name already exists");
-        }
-        return subscriptionPlanRepository.save(plan);
-    }
-
-    @Transactional
-    public SubscriptionPlan updatePlan(UUID id, SubscriptionPlan updatedPlan) {
-        SubscriptionPlan existingPlan = subscriptionPlanRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Subscription plan not found"));
-
-        existingPlan.setName(updatedPlan.getName());
-        existingPlan.setPrice(updatedPlan.getPrice());
-        existingPlan.setDailyQuestionLimit(updatedPlan.getDailyQuestionLimit());
-        existingPlan.setDurationInMonths(updatedPlan.getDurationInMonths());
-        existingPlan.setDescription(updatedPlan.getDescription());
-        existingPlan.setActive(updatedPlan.getActive());
-
-        return subscriptionPlanRepository.save(existingPlan);
-    }
-
-    @Transactional
-    public void deletePlan(UUID id) {
-        if (!subscriptionPlanRepository.existsById(id)) {
-            throw new ResourceNotFoundException("Subscription plan not found");
-        }
-        subscriptionPlanRepository.deleteById(id);
-    }
-
-    @Transactional(readOnly = true)
-    public List<StudentSubscriptionResponse> findMySubscriptionHistory(String email) {
-        User student = findStudentByEmail(email);
-        // Lấy lịch sử tất cả các lần mua gói của cơ chế mới
-        List<StudentSubscription> subscriptions = subscriptionRepository.findAllByStudent_IdOrderBySubscribedAtDesc(student.getId());
         return subscriptions.stream().map(this::toResponse).toList();
     }
 
@@ -179,18 +92,24 @@ public class StudentSubscriptionService {
         return user;
     }
 
+    private Subject findSubject(UUID subjectId) {
+        return subjectRepository.findById(subjectId)
+                .orElseThrow(() -> new ResourceNotFoundException("Subject not found"));
+    }
+
     private StudentSubscriptionResponse toResponse(StudentSubscription subscription) {
         return StudentSubscriptionResponse.builder()
                 .id(subscription.getId())
-                .planId(subscription.getSubscriptionPlan().getId())
-                .planName(subscription.getSubscriptionPlan().getName())
-                .dailyQuestionLimit(subscription.getSubscriptionPlan().getDailyQuestionLimit())
+                .subjectId(subscription.getSubject().getId())
+                .subjectCode(subscription.getSubject().getCode())
+                .subjectName(subscription.getSubject().getName())
                 .active(subscription.getActive())
                 .subscribedAt(subscription.getSubscribedAt())
-                .expiresAt(subscription.getExpiresAt())
                 .unsubscribedAt(subscription.getUnsubscribedAt())
-                .createdAt(subscription.getCreatedAt()) // 🚀 SỬA THÀNH DÒNG NÀY CHO KHỚP ENTITY
+                .createdAt(subscription.getCreatedAt())
                 .updatedAt(subscription.getUpdatedAt())
                 .build();
     }
 }
+
+
