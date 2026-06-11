@@ -11,6 +11,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import swdchatbox.system.common.dto.PageResponse;
+import swdchatbox.system.subject.dto.request.SubjectFilterRequest;
 import swdchatbox.system.subject.dto.request.SubjectRequest;
 import swdchatbox.system.subject.dto.response.SubjectResponse;
 import swdchatbox.system.subject.service.SubjectService;
@@ -25,9 +26,11 @@ public class SubjectController {
 
     private final SubjectService subjectService;
 
-    @Operation(summary = "Lấy danh sách môn học", description = "FE dùng để hiển thị list subject có phân trang. Hỗ trợ sort bằng `sortBy` và `sortDir`.")
+    @Operation(summary = "Lấy danh sách môn học", description = "FE dùng để hiển thị list subject có phân trang. Hỗ trợ filter theo active, keyword, sort bằng `sortBy` và `sortDir`.")
     @GetMapping
     public ResponseEntity<PageResponse<SubjectResponse>> findAll(
+            @Parameter(description = "Lọc theo trạng thái active") @RequestParam(required = false) Boolean active,
+            @Parameter(description = "Từ khóa tìm kiếm theo code, name, description") @RequestParam(required = false) String keyword,
             @Parameter(description = "Trường sắp xếp: code, name, createdAt, updatedAt")
             @RequestParam(required = false) String sortBy,
             @Parameter(description = "Hướng sắp xếp: asc hoặc desc")
@@ -37,8 +40,12 @@ public class SubjectController {
             @Parameter(description = "Số phần tử trên mỗi trang")
             @RequestParam(defaultValue = "20") int size
     ) {
+        SubjectFilterRequest filter = new SubjectFilterRequest();
+        filter.setActive(active);
+        filter.setKeyword(keyword);
+
         Pageable pageable = PageRequest.of(page, size, resolveSort(sortBy, sortDir));
-        return ResponseEntity.ok(subjectService.findAll(pageable));
+        return ResponseEntity.ok(subjectService.findAll(filter, pageable));
     }
 
     @Operation(summary = "Lấy chi tiết môn học", description = "FE dùng khi mở trang chi tiết subject hoặc đổ dữ liệu vào form chỉnh sửa.")

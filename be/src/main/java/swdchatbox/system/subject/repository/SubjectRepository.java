@@ -1,14 +1,16 @@
 package swdchatbox.system.subject.repository;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import swdchatbox.system.subject.entity.Subject;
 
+import java.util.Optional;
 import java.util.UUID;
 
-import java.util.Optional;
-
-public interface SubjectRepository extends JpaRepository<Subject, UUID> {
+public interface SubjectRepository extends JpaRepository<Subject, UUID>, JpaSpecificationExecutor<Subject> {
     boolean existsByCode(String code);
+
+    boolean existsByCodeAndIdNot(String code, UUID id);
 
     Optional<Subject> findByCode(String code);
 }
