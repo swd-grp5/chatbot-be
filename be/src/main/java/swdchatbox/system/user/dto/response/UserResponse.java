@@ -2,7 +2,7 @@ package swdchatbox.system.user.dto.response;
 
 import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import lombok.Builder;
-import swdchatbox.system.user.enums.UserRole;
+import swdchatbox.system.role.dto.response.RoleResponse;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -13,7 +13,7 @@ public record UserResponse(
         UUID id,
         String fullName,
         String email,
-        UserRole role,
+        RoleResponse role,
         Boolean isActive,
         LocalDateTime createdAt,
         LocalDateTime updatedAt

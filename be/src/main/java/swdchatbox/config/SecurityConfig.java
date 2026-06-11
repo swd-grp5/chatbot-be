@@ -65,6 +65,8 @@ public class SecurityConfig {
                                 "/webjars/**"
                         ).permitAll()
                         .requestMatchers(HttpMethod.PUT, "/auth/role/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.GET, "/roles", "/roles/**").authenticated()
+                        .requestMatchers("/roles/**").hasRole("ADMIN")
                         .requestMatchers("/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )

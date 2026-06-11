@@ -36,7 +36,9 @@ public final class DocumentSpecifications {
             return cb.or(
                     cb.like(cb.lower(root.get("title")), like),
                     cb.like(cb.lower(root.get("description")), like),
-                    cb.like(cb.lower(root.get("extractedText")), like),
+                    // extractedText is @Lob (CLOB): Hibernate 6 rejects lower() on CLOB.
+                    // MySQL utf8mb4 collation is case-insensitive, so plain LIKE is enough.
+                    cb.like(root.get("extractedText"), like),
                     cb.like(cb.lower(root.get("subject").get("name")), like),
                     cb.like(cb.lower(root.get("subject").get("code")), like)
             );

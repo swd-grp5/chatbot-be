@@ -1,5 +1,6 @@
 package swdchatbox.system.user.mapper;
 
+import swdchatbox.system.role.mapper.RoleMapper;
 import swdchatbox.system.user.dto.response.UserResponse;
 import swdchatbox.system.user.entity.User;
 
@@ -13,7 +14,7 @@ public final class UserMapper {
                 .id(user.getId())
                 .fullName(user.getFullName())
                 .email(user.getEmail())
-                .role(user.getRole())
+                .role(RoleMapper.toResponse(user.getRole()))
                 .isActive(user.getIsActive())
                 .createdAt(user.getCreatedAt())
                 .updatedAt(user.getUpdatedAt())

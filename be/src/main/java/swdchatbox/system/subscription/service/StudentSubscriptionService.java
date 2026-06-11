@@ -14,8 +14,8 @@ import swdchatbox.system.subscription.entity.StudentSubscription;
 import swdchatbox.system.subscription.entity.SubscriptionPlan;
 import swdchatbox.system.subscription.repository.StudentSubscriptionRepository;
 import swdchatbox.system.subscription.repository.SubscriptionPlanRepository;
+import swdchatbox.system.role.RoleCodes;
 import swdchatbox.system.user.entity.User;
-import swdchatbox.system.user.enums.UserRole;
 import swdchatbox.system.user.repository.UserRepository;
 
 import java.math.BigDecimal;
@@ -172,7 +172,7 @@ public class StudentSubscriptionService {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
-        if (user.getRole() != UserRole.STUDENT) {
+        if (!RoleCodes.STUDENT.equals(user.getRole().getCode())) {
             throw new BadRequestException("Only student accounts can use subscriptions");
         }
 

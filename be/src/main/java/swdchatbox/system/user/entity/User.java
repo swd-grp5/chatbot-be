@@ -2,8 +2,8 @@ package swdchatbox.system.user.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import swdchatbox.system.role.entity.Role;
 import swdchatbox.system.user.enums.AuthProvider;
-import swdchatbox.system.user.enums.UserRole;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -30,9 +30,9 @@ public class User {
     @Column(nullable = true)
     private String password;
 
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 20)
-    private UserRole role;
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "role_id", nullable = false)
+    private Role role;
 
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;
@@ -55,10 +55,6 @@ public class User {
 
         if (this.isActive == null) {
             this.isActive = true;
-        }
-
-        if (this.role == null) {
-            this.role = UserRole.STUDENT;
         }
 
         if (this.provider == null) {
