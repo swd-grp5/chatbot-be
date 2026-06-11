@@ -4,17 +4,20 @@ import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import swdchatbox.system.common.dto.PageResponse;
 import swdchatbox.system.common.exception.BadRequestException;
 import swdchatbox.system.common.exception.ResourceNotFoundException;
 import swdchatbox.system.role.RoleCodes;
+import swdchatbox.system.role.dto.request.RoleFilterRequest;
 import swdchatbox.system.role.dto.request.RoleRequest;
 import swdchatbox.system.role.dto.request.RoleUpdateRequest;
 import swdchatbox.system.role.dto.response.RoleResponse;
 import swdchatbox.system.role.entity.Role;
 import swdchatbox.system.role.mapper.RoleMapper;
 import swdchatbox.system.role.repository.RoleRepository;
+import swdchatbox.system.role.repository.RoleSpecifications;
 import swdchatbox.system.user.repository.UserRepository;
 
 import java.util.List;
@@ -27,8 +30,14 @@ public class RoleService {
     private final RoleRepository roleRepository;
     private final UserRepository userRepository;
 
-    public PageResponse<RoleResponse> findAll(Pageable pageable) {
-        Page<Role> page = roleRepository.findAll(pageable);
+    public PageResponse<RoleResponse> findAll(RoleFilterRequest filter, Pageable pageable) {
+        Specification<Role> spec = Specification
+                .where(RoleSpecifications.hasActive(filter != null ? filter.getActive() : null))
+                .and(RoleSpecifications.keywordLike(filter != null ? filter.getKeyword() : null))
+                .and(RoleSpecifications.createdAfter(filter != null ? filter.getCreatedFrom() : null))
+                .and(RoleSpecifications.createdBefore(filter != null ? filter.getCreatedTo() : null));
+
+        Page<Role> page = roleRepository.findAll(spec, pageable);
         return PageResponse.<RoleResponse>builder()
                 .content(page.getContent().stream().map(RoleMapper::toResponse).toList())
                 .page(page.getNumber())
