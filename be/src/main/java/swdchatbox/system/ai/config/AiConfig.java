@@ -1,8 +1,6 @@
 package swdchatbox.system.ai.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -51,11 +49,5 @@ public class AiConfig {
         return RestClient.builder()
                 .baseUrl(baseUrl)
                 .build();
-    }
-
-    @Bean
-    @ConditionalOnMissingBean
-    public ObjectMapper objectMapper() {
-        return new ObjectMapper();
     }
 }

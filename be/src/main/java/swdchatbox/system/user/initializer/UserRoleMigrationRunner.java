@@ -1,6 +1,7 @@
 package swdchatbox.system.user.initializer;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.core.annotation.Order;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -9,20 +10,16 @@ import org.springframework.transaction.annotation.Transactional;
 import swdchatbox.system.role.RoleCodes;
 import swdchatbox.system.role.entity.Role;
 import swdchatbox.system.role.repository.RoleRepository;
-import swdchatbox.system.user.entity.User;
-import swdchatbox.system.user.repository.UserRepository;
 
-import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
+@Slf4j
 @Component
 @Order(2)
 @RequiredArgsConstructor
 public class UserRoleMigrationRunner implements CommandLineRunner {
 
     private final JdbcTemplate jdbcTemplate;
-    private final UserRepository userRepository;
     private final RoleRepository roleRepository;
 
     @Override
@@ -37,35 +34,31 @@ public class UserRoleMigrationRunner implements CommandLineRunner {
             return;
         }
 
-        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT id, role FROM users WHERE role IS NOT NULL"
-        );
+        int updated = jdbcTemplate.update("""
+                UPDATE users u
+                INNER JOIN roles r ON r.code = u.role
+                SET u.role_id = r.id
+                WHERE u.role IS NOT NULL
+                """);
 
-        for (Map<String, Object> row : rows) {
-            UUID userId = UUID.fromString(row.get("id").toString());
-            String roleCode = row.get("role").toString();
-
-            roleRepository.findByCode(roleCode).ifPresent(role ->
-                    userRepository.findById(userId).ifPresent(user -> {
-                        if (user.getRole() == null) {
-                            user.setRole(role);
-                            userRepository.save(user);
-                        }
-                    })
-            );
-        }
+        log.info("Migrated role_id from legacy role column for {} user(s)", updated);
     }
 
     private void assignDefaultRoleToUsersWithoutRole() {
-        Role defaultRole = roleRepository.findByCode(RoleCodes.STUDENT)
+        UUID defaultRoleId = roleRepository.findByCode(RoleCodes.STUDENT)
+                .map(Role::getId)
                 .orElseThrow(() -> new IllegalStateException("Default STUDENT role not found"));
 
-        userRepository.findAll().stream()
-                .filter(user -> user.getRole() == null)
-                .forEach(user -> {
-                    user.setRole(defaultRole);
-                    userRepository.save(user);
-                });
+        int updated = jdbcTemplate.update("""
+                UPDATE users u
+                LEFT JOIN roles r ON u.role_id = r.id
+                SET u.role_id = ?
+                WHERE r.id IS NULL
+                """, defaultRoleId);
+
+        if (updated > 0) {
+            log.info("Assigned default STUDENT role to {} user(s) with missing or invalid role_id", updated);
+        }
     }
 
     private boolean legacyRoleColumnExists() {
