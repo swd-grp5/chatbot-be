@@ -16,6 +16,7 @@ import swdchatbox.system.document.dto.request.DocumentUpdateRequest;
 import swdchatbox.system.document.dto.request.DocumentUploadRequest;
 import swdchatbox.system.document.dto.response.DocumentDashboardStatsResponse;
 import swdchatbox.system.document.dto.response.DocumentIndexStatusResponse;
+import swdchatbox.system.document.dto.response.DocumentPreviewResponse;
 import swdchatbox.system.document.dto.response.DocumentResponse;
 import swdchatbox.system.document.dto.response.DocumentViewResponse;
 import swdchatbox.system.document.entity.Document;
@@ -69,6 +70,7 @@ public class DocumentService {
     private final DocumentStorageService documentStorageService;
     private final DocumentIndexJobService documentIndexJobService;
     private final DocumentPageCountService documentPageCountService;
+    private final DocumentPreviewService documentPreviewService;
     private final VectorStoreService vectorStoreService;
 
     @Transactional
@@ -199,6 +201,11 @@ public class DocumentService {
     public DocumentResponse findById(UUID id) {
         Document document = refreshTotalPagesIfMissing(findDocument(id));
         return toResponse(document);
+    }
+
+    public DocumentPreviewResponse getPreview(UUID id) {
+        refreshTotalPagesIfMissing(findDocument(id));
+        return documentPreviewService.preview(id);
     }
 
     public DocumentViewResponse getViewerInfo(UUID id) {

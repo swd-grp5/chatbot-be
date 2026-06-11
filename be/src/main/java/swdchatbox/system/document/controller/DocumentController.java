@@ -22,6 +22,7 @@ import swdchatbox.system.document.dto.request.DocumentUploadRequest;
 import swdchatbox.system.document.dto.response.DocumentChunkResponse;
 import swdchatbox.system.document.dto.response.DocumentDashboardStatsResponse;
 import swdchatbox.system.document.dto.response.DocumentIndexStatusResponse;
+import swdchatbox.system.document.dto.response.DocumentPreviewResponse;
 import swdchatbox.system.document.dto.response.DocumentViewResponse;
 import swdchatbox.system.common.dto.PageResponse;
 import swdchatbox.system.document.dto.response.DocumentResponse;
@@ -124,6 +125,20 @@ public class DocumentController {
     @GetMapping("/{id}/viewer")
     public ResponseEntity<DocumentViewResponse> viewer(@PathVariable UUID id) {
         return ResponseEntity.ok(documentService.getViewerInfo(id));
+    }
+
+    @Operation(
+            summary = "Preview trang đầu tài liệu",
+            description = """
+                    FE dùng để hiển thị thumbnail/preview nhanh mà không tải toàn bộ file về client.
+                    - PDF: trả ảnh PNG trang 1 (base64), dù file gốc lớn.
+                    - TXT/DOCX/PPTX: trả đoạn text rút gọn.
+                    Dùng endpoint này thay `/view` khi chỉ cần xem trước trong danh sách/chi tiết.
+                    """
+    )
+    @GetMapping("/{id}/preview")
+    public ResponseEntity<DocumentPreviewResponse> preview(@PathVariable UUID id) {
+        return ResponseEntity.ok(documentService.getPreview(id));
     }
 
     @Operation(summary = "Xem file tài liệu", description = "FE dùng để hiển thị file trực tiếp trên trình duyệt (PDF viewer). Trả file dạng inline, kết hợp với `totalPages` từ `/viewer`.")
