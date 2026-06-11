@@ -22,6 +22,8 @@ import swdchatbox.system.auth.dto.response.ResendVerificationResponse;
 import swdchatbox.system.auth.service.AuthService;
 import swdchatbox.system.auth.service.EmailVerificationService;
 import swdchatbox.system.auth.service.PasswordResetService;
+import swdchatbox.system.common.exception.ResourceNotFoundException;
+import swdchatbox.system.role.repository.RoleRepository;
 import swdchatbox.system.user.dto.response.UserResponse;
 import swdchatbox.system.user.entity.User;
 import swdchatbox.system.user.repository.UserRepository;
@@ -39,6 +41,7 @@ public class AuthController {
     private final EmailVerificationService emailVerificationService;
     private final PasswordResetService passwordResetService;
     private final UserRepository userRepository;
+    private final RoleRepository roleRepository;
 
     @Operation(summary = "Đăng ký tài khoản", description = "Dùng cho FE khi người dùng tạo tài khoản mới. Gửi đầy đủ thông tin theo `RegisterRequest`.")
     @PostMapping("/register")
@@ -128,7 +131,8 @@ public class AuthController {
     ) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new swdchatbox.system.common.exception.AuthException("User not found"));
-        user.setRole(request.getRole());
+        user.setRole(roleRepository.findById(request.getRoleId())
+                .orElseThrow(() -> new ResourceNotFoundException("Role not found")));
         userRepository.save(user);
         return ResponseEntity.ok().build();
     }

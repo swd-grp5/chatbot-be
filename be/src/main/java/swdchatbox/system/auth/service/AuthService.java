@@ -15,10 +15,12 @@ import swdchatbox.system.auth.dto.request.LoginRequest;
 import swdchatbox.system.auth.dto.request.RegisterRequest;
 import swdchatbox.system.auth.dto.response.AuthResponse;
 import swdchatbox.system.common.exception.AuthException;
+import swdchatbox.system.role.RoleCodes;
+import swdchatbox.system.role.service.RoleService;
 import swdchatbox.system.user.dto.response.UserResponse;
 import swdchatbox.system.user.entity.User;
 import swdchatbox.system.user.enums.AuthProvider;
-import swdchatbox.system.user.enums.UserRole;
+import swdchatbox.system.user.mapper.UserMapper;
 import swdchatbox.system.user.repository.UserRepository;
 
 import java.util.List;
@@ -32,6 +34,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final EmailVerificationService emailVerificationService;
+    private final RoleService roleService;
 
     @Value("${app.google.client-id}")
     private String googleClientId;
@@ -49,7 +52,7 @@ public class AuthService {
                 .fullName(request.getFullName())
                 .email(request.getEmail())
                 .password(passwordEncoder.encode(request.getPassword()))
-                .role(UserRole.STUDENT)
+                .role(roleService.findRoleByCode(RoleCodes.STUDENT))
                 .provider(AuthProvider.LOCAL)
                 .emailVerified(false)
                 .isActive(false)
@@ -130,7 +133,7 @@ public class AuthService {
                     .fullName(name != null ? name : email)
                     .email(email)
                     .password(null)
-                    .role(UserRole.STUDENT)
+                    .role(roleService.findRoleByCode(RoleCodes.STUDENT))
                     .provider(AuthProvider.GOOGLE)
                     .emailVerified(emailVerified != null && emailVerified)
                     .isActive(true)
@@ -158,14 +161,6 @@ public class AuthService {
     }
 
     public UserResponse toUserResponse(User user) {
-        return UserResponse.builder()
-                .id(user.getId())
-                .fullName(user.getFullName())
-                .email(user.getEmail())
-                .role(user.getRole())
-                .isActive(user.getIsActive())
-                .createdAt(user.getCreatedAt())
-                .updatedAt(user.getUpdatedAt())
-                .build();
+        return UserMapper.toResponse(user);
     }
 }

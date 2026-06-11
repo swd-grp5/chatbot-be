@@ -40,7 +40,7 @@ public class JwtService {
         long exp = (rememberMe != null && rememberMe) ? expirationMs : shortExpirationMs;
         return Jwts.builder()
                 .subject(user.getEmail())
-                .claim("role", user.getRole().name())
+                .claim("role", user.getRole().getCode())
                 .claim("userId", user.getId().toString())
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + exp))
