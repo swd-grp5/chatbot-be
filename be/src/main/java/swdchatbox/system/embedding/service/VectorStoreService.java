@@ -187,6 +187,9 @@ public class VectorStoreService {
      * Delete vectors by their IDs.
      */
     public void deleteByIds(List<String> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return;
+        }
         String collection = aiProperties.getQdrantCollectionName();
         Map<String, Object> body = Map.of("points", ids);
 
@@ -200,6 +203,33 @@ public class VectorStoreService {
             log.debug("Deleted {} vectors from collection '{}'", ids.size(), collection);
         } catch (Exception e) {
             log.error("Failed to delete vectors", e);
+        }
+    }
+
+    /**
+     * Delete all vectors whose payload matches the given document ID.
+     */
+    public void deleteByDocumentId(UUID documentId) {
+        if (documentId == null) {
+            return;
+        }
+        String collection = aiProperties.getQdrantCollectionName();
+        Map<String, Object> body = Map.of(
+                "filter", Map.of(
+                        "must", List.of(Map.of(
+                                "key", "documentId",
+                                "match", Map.of("value", documentId.toString())))));
+
+        try {
+            qdrantRestClient.post()
+                    .uri("/collections/{name}/points/delete", collection)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+            log.info("Deleted vectors for documentId={} from collection '{}'", documentId, collection);
+        } catch (Exception e) {
+            log.error("Failed to delete vectors for documentId={}", documentId, e);
         }
     }
 

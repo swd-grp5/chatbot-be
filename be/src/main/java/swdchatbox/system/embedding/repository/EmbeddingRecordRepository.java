@@ -17,5 +17,7 @@ public interface EmbeddingRecordRepository extends JpaRepository<EmbeddingRecord
 
     List<EmbeddingRecord> findAllByCollection_Id(UUID collectionId);
 
+    List<EmbeddingRecord> findAllByChunk_Document_Id(UUID documentId);
+
     void deleteAllByChunk_Document_Id(UUID documentId);
 }

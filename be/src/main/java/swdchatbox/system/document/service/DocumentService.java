@@ -24,11 +24,17 @@ import swdchatbox.system.document.enums.DocumentStatus;
 import swdchatbox.system.document.enums.DocumentType;
 import swdchatbox.system.document.mapper.DocumentFileMapper;
 import swdchatbox.system.document.mapper.DocumentMapper;
+import swdchatbox.system.citation.repository.MessageCitationRepository;
+import swdchatbox.system.document.entity.DocumentChunk;
 import swdchatbox.system.document.repository.DocumentChunkRepository;
 import swdchatbox.system.document.repository.DocumentFileRepository;
 import swdchatbox.system.document.repository.DocumentIndexJobRepository;
 import swdchatbox.system.document.repository.DocumentRepository;
 import swdchatbox.system.document.repository.DocumentSpecifications;
+import swdchatbox.system.embedding.entity.EmbeddingRecord;
+import swdchatbox.system.embedding.repository.EmbeddingRecordRepository;
+import swdchatbox.system.embedding.service.VectorStoreService;
+import swdchatbox.system.ingestion.repository.IngestionJobRepository;
 import swdchatbox.system.subject.entity.Subject;
 import swdchatbox.system.subject.repository.SubjectRepository;
 import swdchatbox.system.user.entity.User;
@@ -36,6 +42,7 @@ import swdchatbox.system.user.repository.UserRepository;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -54,11 +61,15 @@ public class DocumentService {
     private final DocumentFileRepository documentFileRepository;
     private final DocumentChunkRepository documentChunkRepository;
     private final DocumentIndexJobRepository documentIndexJobRepository;
+    private final EmbeddingRecordRepository embeddingRecordRepository;
+    private final MessageCitationRepository messageCitationRepository;
+    private final IngestionJobRepository ingestionJobRepository;
     private final SubjectRepository subjectRepository;
     private final UserRepository userRepository;
     private final DocumentStorageService documentStorageService;
     private final DocumentIndexJobService documentIndexJobService;
     private final DocumentPageCountService documentPageCountService;
+    private final VectorStoreService vectorStoreService;
 
     @Transactional
     public List<DocumentResponse> upload(List<DocumentUploadRequest> items, List<MultipartFile> files, String userEmail) {
@@ -245,20 +256,48 @@ public class DocumentService {
     @Transactional
     public void delete(UUID id) {
         log.info("Deleting document id={}", id);
-        Document document = findDocument(id);
+        findDocument(id);
         List<DocumentFile> documentFiles = documentFileRepository.findAllByDocument_Id(id);
-        log.info("Deleting document id={} fileCount={}", id, documentFiles.size());
+
+        deleteRelatedVectors(id);
+        deleteRelatedDatabaseRecords(id);
+        deleteStoredFiles(id, documentFiles);
+
+        documentRepository.deleteById(id);
+        log.info("Document deleted id={}", id);
+    }
+
+    private void deleteRelatedVectors(UUID documentId) {
+        Set<String> vectorIds = new LinkedHashSet<>();
+        for (EmbeddingRecord record : embeddingRecordRepository.findAllByChunk_Document_Id(documentId)) {
+            if (record.getVectorId() != null && !record.getVectorId().isBlank()) {
+                vectorIds.add(record.getVectorId());
+            }
+        }
+        for (DocumentChunk chunk : documentChunkRepository.findAllByDocument_IdOrderByChunkIndexAsc(documentId)) {
+            vectorIds.add(chunk.getId().toString());
+        }
+        vectorStoreService.deleteByIds(new ArrayList<>(vectorIds));
+        vectorStoreService.deleteByDocumentId(documentId);
+    }
+
+    private void deleteRelatedDatabaseRecords(UUID documentId) {
+        messageCitationRepository.deleteAllByDocument_Id(documentId);
+        embeddingRecordRepository.deleteAllByChunk_Document_Id(documentId);
+        documentChunkRepository.deleteAllByDocument_Id(documentId);
+        documentIndexJobRepository.deleteAllByDocument_Id(documentId);
+        documentFileRepository.deleteAllByDocument_Id(documentId);
+        ingestionJobRepository.deleteByDocument_Id(documentId);
+    }
+
+    private void deleteStoredFiles(UUID documentId, List<DocumentFile> documentFiles) {
+        log.info("Deleting stored files documentId={} fileCount={}", documentId, documentFiles.size());
         for (DocumentFile file : documentFiles) {
-            log.info("Deleting document file documentId={} fileId={} path={} storedFileName={}",
-                    id, file.getId(), file.getFilePath(), file.getStoredFileName());
+            log.info("Deleting stored file documentId={} fileId={} path={} storedFileName={}",
+                    documentId, file.getId(), file.getFilePath(), file.getStoredFileName());
             documentStorageService.deleteFile(file.getFilePath());
         }
-        documentStorageService.deleteDocumentFolder(id);
-        documentChunkRepository.deleteAllByDocument_Id(id);
-        documentIndexJobRepository.deleteAllByDocument_Id(id);
-        documentFileRepository.deleteAllByDocument_Id(id);
-        documentRepository.delete(document);
-        log.info("Document deleted id={}", id);
+        documentStorageService.deleteDocumentFolder(documentId);
     }
 
     @Transactional

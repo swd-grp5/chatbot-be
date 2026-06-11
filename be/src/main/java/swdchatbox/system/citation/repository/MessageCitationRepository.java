@@ -13,4 +13,6 @@ public interface MessageCitationRepository extends JpaRepository<MessageCitation
     List<MessageCitation> findAllByMessage_IdIn(List<UUID> messageIds);
 
     void deleteAllByMessage_Conversation_Id(UUID conversationId);
+
+    void deleteAllByDocument_Id(UUID documentId);
 }
