@@ -11,6 +11,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import swdchatbox.system.common.dto.PageResponse;
+import swdchatbox.system.role.dto.request.RoleFilterRequest;
 import swdchatbox.system.role.dto.request.RoleRequest;
 import swdchatbox.system.role.dto.request.RoleUpdateRequest;
 import swdchatbox.system.role.dto.response.RoleResponse;
@@ -27,20 +28,26 @@ public class RoleController {
 
     private final RoleService roleService;
 
-    @Operation(summary = "Lấy danh sách role", description = "FE dùng để hiển thị list role có phân trang. Hỗ trợ sort bằng `sortBy` và `sortDir`.")
+    @Operation(summary = "Lấy danh sách role", description = "FE dùng để hiển thị list role. Hỗ trợ filter theo active, keyword, khoảng thời gian, phân trang và sort.")
     @GetMapping
     public ResponseEntity<PageResponse<RoleResponse>> findAll(
-            @Parameter(description = "Trường sắp xếp: code, name, createdAt, updatedAt")
-            @RequestParam(required = false) String sortBy,
-            @Parameter(description = "Hướng sắp xếp: asc hoặc desc")
-            @RequestParam(required = false) String sortDir,
-            @Parameter(description = "Số trang, bắt đầu từ 0")
-            @RequestParam(defaultValue = "0") int page,
-            @Parameter(description = "Số phần tử trên mỗi trang")
-            @RequestParam(defaultValue = "20") int size
+            @Parameter(description = "Lọc theo trạng thái active") @RequestParam(required = false) Boolean active,
+            @Parameter(description = "Từ khóa tìm kiếm (code, name, description)") @RequestParam(required = false) String keyword,
+            @Parameter(description = "Ngày tạo từ (ISO-8601)") @RequestParam(required = false) String createdFrom,
+            @Parameter(description = "Ngày tạo đến (ISO-8601)") @RequestParam(required = false) String createdTo,
+            @Parameter(description = "Số trang, bắt đầu từ 0") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Số phần tử trên mỗi trang") @RequestParam(defaultValue = "20") int size,
+            @Parameter(description = "Trường sắp xếp: code, name, active, createdAt, updatedAt") @RequestParam(required = false) String sortBy,
+            @Parameter(description = "Hướng sắp xếp: asc hoặc desc") @RequestParam(required = false) String sortDir
     ) {
+        RoleFilterRequest filter = new RoleFilterRequest();
+        filter.setActive(active);
+        filter.setKeyword(keyword);
+        filter.setCreatedFrom(createdFrom != null ? java.time.LocalDateTime.parse(createdFrom) : null);
+        filter.setCreatedTo(createdTo != null ? java.time.LocalDateTime.parse(createdTo) : null);
+
         Pageable pageable = PageRequest.of(page, size, resolveSort(sortBy, sortDir));
-        return ResponseEntity.ok(roleService.findAll(pageable));
+        return ResponseEntity.ok(roleService.findAll(filter, pageable));
     }
 
     @Operation(summary = "Lấy danh sách role đang active", description = "FE dùng khi cần dropdown chọn role (ví dụ gán role cho user).")
@@ -91,7 +98,7 @@ public class RoleController {
             return "createdAt";
         }
         return switch (sortBy) {
-            case "code", "name", "createdAt", "updatedAt" -> sortBy;
+            case "code", "name", "active", "createdAt", "updatedAt" -> sortBy;
             default -> "createdAt";
         };
     }
