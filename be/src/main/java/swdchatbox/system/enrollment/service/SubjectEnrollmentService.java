@@ -33,38 +33,22 @@ public class SubjectEnrollmentService {
         saveStudentSubjectEnrollments(student, subjectIds);
     }
 
+    /** Đồng bộ danh sách môn: mảng gửi lên = danh sách cuối cùng (thêm thiếu, gỡ dư). */
     @Transactional
-    public void toggleStudentSubjects(User student, List<UUID> subjectIds) {
-        if (subjectIds == null || subjectIds.isEmpty()) {
-            return;
-        }
+    public void syncStudentSubjects(User student, List<UUID> subjectIds) {
+        validateSubjectIds(subjectIds, true);
+        Set<UUID> targetIds = new LinkedHashSet<>(subjectIds);
+        Set<UUID> currentIds = new HashSet<>(getStudentSubjectIds(student.getId()));
 
-        Set<UUID> uniqueIds = new LinkedHashSet<>(subjectIds);
-        if (uniqueIds.size() != subjectIds.size()) {
-            throw new BadRequestException("Duplicate subject IDs are not allowed");
-        }
-
-        List<UUID> toAdd = new ArrayList<>();
-        List<UUID> toRemove = new ArrayList<>();
-        for (UUID subjectId : uniqueIds) {
-            if (studentSubjectRepository.existsByStudent_IdAndSubject_Id(student.getId(), subjectId)) {
-                toRemove.add(subjectId);
-            } else {
-                toAdd.add(subjectId);
+        for (UUID subjectId : currentIds) {
+            if (!targetIds.contains(subjectId)) {
+                studentSubjectRepository.deleteByStudent_IdAndSubject_Id(student.getId(), subjectId);
             }
         }
 
+        List<UUID> toAdd = targetIds.stream().filter(id -> !currentIds.contains(id)).toList();
         if (!toAdd.isEmpty()) {
-            validateSubjectIds(toAdd, false);
             saveStudentSubjectEnrollments(student, toAdd);
-        }
-
-        for (UUID subjectId : toRemove) {
-            studentSubjectRepository.deleteByStudent_IdAndSubject_Id(student.getId(), subjectId);
-        }
-
-        if (!studentSubjectRepository.existsByStudent_Id(student.getId())) {
-            throw new BadRequestException("At least one subject must be enrolled");
         }
     }
 
@@ -75,38 +59,22 @@ public class SubjectEnrollmentService {
         saveLecturerSubjectEnrollments(lecturer, subjectIds);
     }
 
+    /** Đồng bộ danh sách môn: mảng gửi lên = danh sách cuối cùng (thêm thiếu, gỡ dư). */
     @Transactional
-    public void toggleLecturerSubjects(User lecturer, List<UUID> subjectIds) {
-        if (subjectIds == null || subjectIds.isEmpty()) {
-            return;
-        }
+    public void syncLecturerSubjects(User lecturer, List<UUID> subjectIds) {
+        validateSubjectIds(subjectIds, true);
+        Set<UUID> targetIds = new LinkedHashSet<>(subjectIds);
+        Set<UUID> currentIds = new HashSet<>(getLecturerSubjectIds(lecturer.getId()));
 
-        Set<UUID> uniqueIds = new LinkedHashSet<>(subjectIds);
-        if (uniqueIds.size() != subjectIds.size()) {
-            throw new BadRequestException("Duplicate subject IDs are not allowed");
-        }
-
-        List<UUID> toAdd = new ArrayList<>();
-        List<UUID> toRemove = new ArrayList<>();
-        for (UUID subjectId : uniqueIds) {
-            if (lecturerSubjectRepository.existsByLecturer_IdAndSubject_Id(lecturer.getId(), subjectId)) {
-                toRemove.add(subjectId);
-            } else {
-                toAdd.add(subjectId);
+        for (UUID subjectId : currentIds) {
+            if (!targetIds.contains(subjectId)) {
+                lecturerSubjectRepository.deleteByLecturer_IdAndSubject_Id(lecturer.getId(), subjectId);
             }
         }
 
+        List<UUID> toAdd = targetIds.stream().filter(id -> !currentIds.contains(id)).toList();
         if (!toAdd.isEmpty()) {
-            validateSubjectIds(toAdd, false);
             saveLecturerSubjectEnrollments(lecturer, toAdd);
-        }
-
-        for (UUID subjectId : toRemove) {
-            lecturerSubjectRepository.deleteByLecturer_IdAndSubject_Id(lecturer.getId(), subjectId);
-        }
-
-        if (!lecturerSubjectRepository.existsByLecturer_Id(lecturer.getId())) {
-            throw new BadRequestException("At least one subject must be enrolled");
         }
     }
 

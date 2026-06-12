@@ -146,7 +146,7 @@ public class LecturerService {
         user = userRepository.save(user);
 
         if (request.getSubjectIds() != null) {
-            subjectEnrollmentService.toggleLecturerSubjects(user, request.getSubjectIds());
+            subjectEnrollmentService.syncLecturerSubjects(user, request.getSubjectIds());
         }
 
         return LecturerMapper.toResponse(user, subjectEnrollmentService.getLecturerSubjects(user.getId()));
