@@ -7,6 +7,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import swdchatbox.system.enrollment.repository.EnrollmentSpecifications;
+import swdchatbox.system.enrollment.service.SubjectEnrollmentService;
 import swdchatbox.system.chat.repository.ChatConversationRepository;
 import swdchatbox.system.common.dto.PageResponse;
 import swdchatbox.system.common.exception.BadRequestException;
@@ -19,12 +21,15 @@ import swdchatbox.system.student.dto.request.StudentRequest;
 import swdchatbox.system.student.dto.request.StudentUpdateRequest;
 import swdchatbox.system.student.dto.response.StudentResponse;
 import swdchatbox.system.student.mapper.StudentMapper;
+import swdchatbox.system.subject.dto.response.SubjectSummaryResponse;
 import swdchatbox.system.subscription.repository.StudentSubscriptionRepository;
 import swdchatbox.system.user.entity.User;
 import swdchatbox.system.user.enums.AuthProvider;
 import swdchatbox.system.user.repository.UserRepository;
 import swdchatbox.system.user.repository.UserSpecifications;
 
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -36,18 +41,29 @@ public class StudentService {
     private final PasswordEncoder passwordEncoder;
     private final StudentSubscriptionRepository studentSubscriptionRepository;
     private final ChatConversationRepository chatConversationRepository;
+    private final SubjectEnrollmentService subjectEnrollmentService;
 
     public PageResponse<StudentResponse> findAll(StudentFilterRequest filter, Pageable pageable) {
         Specification<User> spec = Specification
                 .where(UserSpecifications.hasRoleCode(RoleCodes.STUDENT))
                 .and(UserSpecifications.hasActive(filter != null ? filter.getActive() : null))
                 .and(UserSpecifications.keywordLike(filter != null ? filter.getKeyword() : null))
+                .and(EnrollmentSpecifications.studentEnrolledInSubject(filter != null ? filter.getSubjectId() : null))
                 .and(UserSpecifications.createdAfter(filter != null ? filter.getCreatedFrom() : null))
                 .and(UserSpecifications.createdBefore(filter != null ? filter.getCreatedTo() : null));
 
         Page<User> page = userRepository.findAll(spec, pageable);
+        List<UUID> studentIds = page.getContent().stream().map(User::getId).toList();
+        Map<UUID, List<SubjectSummaryResponse>> subjectsByStudent =
+                subjectEnrollmentService.getStudentSubjectsByStudentIds(studentIds);
+
         return PageResponse.<StudentResponse>builder()
-                .content(page.getContent().stream().map(StudentMapper::toResponse).toList())
+                .content(page.getContent().stream()
+                        .map(user -> StudentMapper.toResponse(
+                                user,
+                                subjectsByStudent.getOrDefault(user.getId(), List.of())
+                        ))
+                        .toList())
                 .page(page.getNumber())
                 .pageSize(page.getSize())
                 .totalElements(page.getTotalElements())
@@ -59,7 +75,17 @@ public class StudentService {
     }
 
     public StudentResponse findById(UUID id) {
-        return StudentMapper.toResponse(findStudent(id));
+        User student = findStudent(id);
+        return StudentMapper.toResponse(student, subjectEnrollmentService.getStudentSubjects(id));
+    }
+
+    public List<SubjectSummaryResponse> findMySubjects(String email) {
+        User student = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        if (!RoleCodes.STUDENT.equals(student.getRole().getCode())) {
+            throw new BadRequestException("Only students can view assigned subjects");
+        }
+        return subjectEnrollmentService.getStudentSubjects(student.getId());
     }
 
     @Transactional
@@ -78,7 +104,9 @@ public class StudentService {
                 .emailVerified(request.getEmailVerified() != null ? request.getEmailVerified() : true)
                 .build();
 
-        return StudentMapper.toResponse(userRepository.save(user));
+        user = userRepository.save(user);
+        subjectEnrollmentService.replaceStudentSubjects(user, request.getSubjectIds());
+        return StudentMapper.toResponse(user, subjectEnrollmentService.getStudentSubjects(user.getId()));
     }
 
     @Transactional
@@ -117,7 +145,13 @@ public class StudentService {
             user.setEmailVerified(request.getEmailVerified());
         }
 
-        return StudentMapper.toResponse(userRepository.save(user));
+        user = userRepository.save(user);
+
+        if (request.getSubjectIds() != null) {
+            subjectEnrollmentService.replaceStudentSubjects(user, request.getSubjectIds());
+        }
+
+        return StudentMapper.toResponse(user, subjectEnrollmentService.getStudentSubjects(user.getId()));
     }
 
     @Transactional
@@ -132,6 +166,7 @@ public class StudentService {
             throw new BadRequestException("Cannot delete student that has chat conversations");
         }
 
+        subjectEnrollmentService.deleteStudentSubjects(id);
         userRepository.delete(user);
     }
 
@@ -139,7 +174,8 @@ public class StudentService {
     public StudentResponse toggleActive(UUID id) {
         User user = findStudent(id);
         user.setIsActive(user.getIsActive() == null || !user.getIsActive());
-        return StudentMapper.toResponse(userRepository.save(user));
+        user = userRepository.save(user);
+        return StudentMapper.toResponse(user, subjectEnrollmentService.getStudentSubjects(user.getId()));
     }
 
     private User findStudent(UUID id) {

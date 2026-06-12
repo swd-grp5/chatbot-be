@@ -27,6 +27,7 @@ import swdchatbox.system.common.exception.BadRequestException;
 import swdchatbox.system.common.exception.ResourceNotFoundException;
 import swdchatbox.system.document.entity.Document;
 import swdchatbox.system.document.entity.DocumentChunk;
+import swdchatbox.system.enrollment.service.SubjectEnrollmentService;
 import swdchatbox.system.subject.entity.Subject;
 import swdchatbox.system.document.repository.DocumentChunkRepository;
 import swdchatbox.system.document.repository.DocumentRepository;
@@ -54,6 +55,7 @@ public class ChatService {
     private final DocumentRepository documentRepository;
     private final DocumentChunkRepository chunkRepository;
     private final SubjectRepository subjectRepository;
+    private final SubjectEnrollmentService subjectEnrollmentService;
 
     private final EmbeddingService embeddingService;
     private final VectorStoreService vectorStoreService;
@@ -66,11 +68,11 @@ public class ChatService {
 
     @Transactional
     public ConversationResponse createConversation(CreateConversationRequest request, User user) {
-        Subject subject = null;
-        if (request.getSubjectId() != null) {
-            subject = subjectRepository.findById(request.getSubjectId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Subject not found"));
+        if (request.getSubjectId() == null) {
+            throw new BadRequestException("Subject is required");
         }
+        subjectEnrollmentService.requireStudentCanAccessSubject(user, request.getSubjectId());
+        Subject subject = subjectEnrollmentService.findActiveSubject(request.getSubjectId());
 
         String documentIdsJson = null;
         if (request.getDocumentIds() != null && !request.getDocumentIds().isEmpty()) {

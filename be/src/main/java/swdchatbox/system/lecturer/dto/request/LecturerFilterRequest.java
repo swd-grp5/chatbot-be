@@ -4,12 +4,14 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 @Getter
 @Setter
 public class LecturerFilterRequest {
     private Boolean active;
     private String keyword;
+    private UUID subjectId;
     private LocalDateTime createdFrom;
     private LocalDateTime createdTo;
 }

@@ -9,14 +9,17 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import swdchatbox.system.common.dto.PageResponse;
+import swdchatbox.system.subject.dto.response.SubjectSummaryResponse;
 import swdchatbox.system.lecturer.dto.request.LecturerFilterRequest;
 import swdchatbox.system.lecturer.dto.request.LecturerRequest;
 import swdchatbox.system.lecturer.dto.request.LecturerUpdateRequest;
 import swdchatbox.system.lecturer.dto.response.LecturerResponse;
 import swdchatbox.system.lecturer.service.LecturerService;
 
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -32,6 +35,7 @@ public class LecturerController {
     public ResponseEntity<PageResponse<LecturerResponse>> findAll(
             @Parameter(description = "Lọc theo trạng thái active") @RequestParam(required = false) Boolean active,
             @Parameter(description = "Từ khóa tìm kiếm theo fullName, email") @RequestParam(required = false) String keyword,
+            @Parameter(description = "Lọc theo môn đã gán") @RequestParam(required = false) UUID subjectId,
             @Parameter(description = "Ngày tạo từ (ISO-8601)") @RequestParam(required = false) String createdFrom,
             @Parameter(description = "Ngày tạo đến (ISO-8601)") @RequestParam(required = false) String createdTo,
             @Parameter(description = "Trường sắp xếp: fullName, email, active, createdAt, updatedAt")
@@ -46,11 +50,19 @@ public class LecturerController {
         LecturerFilterRequest filter = new LecturerFilterRequest();
         filter.setActive(active);
         filter.setKeyword(keyword);
+        filter.setSubjectId(subjectId);
         filter.setCreatedFrom(createdFrom != null ? java.time.LocalDateTime.parse(createdFrom) : null);
         filter.setCreatedTo(createdTo != null ? java.time.LocalDateTime.parse(createdTo) : null);
 
         Pageable pageable = PageRequest.of(page, size, resolveSort(sortBy, sortDir));
         return ResponseEntity.ok(lecturerService.findAll(filter, pageable));
+    }
+
+    @Operation(summary = "Lấy danh sách môn được phép upload", description = "Giảng viên đang đăng nhập xem các môn mình được gán để chọn khi upload tài liệu.")
+    @GetMapping("/my-subjects")
+    public ResponseEntity<List<SubjectSummaryResponse>> mySubjects(Authentication authentication) {
+        String email = authentication != null ? authentication.getName() : null;
+        return ResponseEntity.ok(lecturerService.findMyUploadSubjects(email));
     }
 
     @Operation(summary = "Lấy chi tiết giảng viên", description = "FE dùng khi mở trang chi tiết lecturer hoặc đổ dữ liệu vào form chỉnh sửa.")
@@ -65,7 +77,7 @@ public class LecturerController {
         return ResponseEntity.ok(lecturerService.create(request));
     }
 
-    @Operation(summary = "Cập nhật giảng viên", description = "Admin chỉnh sửa thông tin lecturer. Chỉ cần gửi các field muốn đổi.")
+    @Operation(summary = "Cập nhật giảng viên", description = "Admin chỉnh sửa thông tin lecturer. Gửi `subjectIds` để thay toàn bộ danh sách môn (thêm/bớt môn: gửi list mới đầy đủ, tối thiểu 1 môn).")
     @PutMapping("/{id}")
     public ResponseEntity<LecturerResponse> update(@PathVariable UUID id, @RequestBody LecturerUpdateRequest request) {
         return ResponseEntity.ok(lecturerService.update(id, request));

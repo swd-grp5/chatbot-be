@@ -43,9 +43,10 @@ public class DocumentController {
     private final DocumentService documentService;
     private final DocumentIndexingService documentIndexingService;
 
-    @Operation(summary = "Upload tài liệu", description = "FE gửi `multipart/form-data`: `data` là mảng JSON (title, description), mỗi phần tử tương ứng 1 file trong `files`. Không cho trùng title trong subject và không cho trùng nội dung file.")
+    @Operation(summary = "Upload tài liệu", description = "FE gửi `multipart/form-data`: `data` là mảng JSON (subjectId, title, description), mỗi phần tử tương ứng 1 file trong `files`. Mỗi document có thể chọn môn, tiêu đề và mô tả riêng qua `data[i]`. `subjectId` (query) chỉ là giá trị mặc định khi phần tử data không gửi subjectId. Giảng viên chỉ upload được môn đã enroll.")
     @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<List<DocumentResponse>> upload(
+            @Parameter(description = "Môn học của tài liệu (có thể gửi trong data thay vì query)") @RequestParam(required = false) UUID subjectId,
             @Valid @RequestPart(value = "data", required = false) List<DocumentUploadRequest> data,
             @Parameter(description = "Danh sách file upload, thứ tự khớp với mảng data")
             @RequestPart(value = "files", required = false) List<MultipartFile> files,
@@ -66,7 +67,7 @@ public class DocumentController {
                         i, file.getOriginalFilename(), file.getSize(), file.getContentType(), file.isEmpty());
             }
         }
-        return ResponseEntity.ok(documentService.upload(data, files, userEmail));
+        return ResponseEntity.ok(documentService.upload(data, files, subjectId, userEmail));
     }
 
     @Operation(summary = "Thống kê tài liệu", description = "FE dùng để hiển thị số liệu dashboard như tổng document, ready, processing, failed.")
@@ -87,10 +88,13 @@ public class DocumentController {
         return ResponseEntity.ok(documentIndexingService.getChunks(id).stream().map(swdchatbox.system.document.mapper.DocumentChunkMapper::toResponse).toList());
     }
 
-    @Operation(summary = "Lấy danh sách tài liệu", description = "FE dùng để render bảng document. Hỗ trợ filter theo subject, loại tài liệu, trạng thái, active, keyword, khoảng thời gian và phân trang.")
+    @Operation(summary = "Lấy danh sách tài liệu", description = "FE dùng để render bảng document. Hỗ trợ filter theo subject, người upload, loại tài liệu, trạng thái, active, keyword, khoảng thời gian và phân trang.")
     @GetMapping
     public ResponseEntity<PageResponse<DocumentResponse>> getAll(
             @Parameter(description = "Lọc theo subjectId") @RequestParam(required = false) UUID subjectId,
+            @Parameter(description = "Lọc theo mã môn (vd: SWD)") @RequestParam(required = false) String subjectCode,
+            @Parameter(description = "Lọc theo tên hoặc email người upload") @RequestParam(required = false) String uploadedBy,
+            @Parameter(description = "Lọc theo ID người upload (dùng khi FE có dropdown)") @RequestParam(required = false) UUID uploadedById,
             @Parameter(description = "Lọc theo loại tài liệu") @RequestParam(required = false) DocumentType documentType,
             @Parameter(description = "Lọc theo trạng thái index") @RequestParam(required = false) swdchatbox.system.document.enums.DocumentStatus status,
             @Parameter(description = "Lọc theo trạng thái active") @RequestParam(required = false) Boolean active,
@@ -99,11 +103,15 @@ public class DocumentController {
             @Parameter(description = "Ngày tạo đến (ISO-8601)") @RequestParam(required = false) String createdTo,
             @Parameter(description = "Số trang, bắt đầu từ 0") @RequestParam(defaultValue = "0") int page,
             @Parameter(description = "Số phần tử trên mỗi trang") @RequestParam(defaultValue = "20") int size,
-            @Parameter(description = "Trường sắp xếp: title, status, documentType, createdAt, updatedAt") @RequestParam(required = false) String sortBy,
-            @Parameter(description = "Hướng sắp xếp: asc hoặc desc") @RequestParam(required = false) String sortDir
+            @Parameter(description = "Trường sắp xếp: title, status, documentType, subjectName, subjectCode, uploadedByName, createdAt, updatedAt") @RequestParam(required = false) String sortBy,
+            @Parameter(description = "Hướng sắp xếp: asc hoặc desc") @RequestParam(required = false) String sortDir,
+            Authentication authentication
     ) {
         DocumentFilterRequest filter = new DocumentFilterRequest();
         filter.setSubjectId(subjectId);
+        filter.setSubjectCode(subjectCode);
+        filter.setUploadedBy(uploadedBy);
+        filter.setUploadedById(uploadedById);
         filter.setDocumentType(documentType);
         filter.setStatus(status);
         filter.setActive(active);
@@ -112,7 +120,8 @@ public class DocumentController {
         filter.setCreatedTo(createdTo != null ? java.time.LocalDateTime.parse(createdTo) : null);
 
         Pageable pageable = PageRequest.of(page, size, resolveSort(sortBy, sortDir));
-        return ResponseEntity.ok(documentService.findAll(filter, pageable));
+        String userEmail = authentication != null ? authentication.getName() : null;
+        return ResponseEntity.ok(documentService.findAll(filter, pageable, userEmail));
     }
 
     @Operation(summary = "Lấy chi tiết tài liệu", description = "FE dùng khi mở trang chi tiết document")
@@ -226,6 +235,9 @@ public class DocumentController {
         }
         return switch (sortBy) {
             case "title", "status", "documentType", "createdAt", "updatedAt" -> sortBy;
+            case "subjectName" -> "subject.name";
+            case "subjectCode" -> "subject.code";
+            case "uploadedByName" -> "uploadedBy.fullName";
             default -> "createdAt";
         };
     }

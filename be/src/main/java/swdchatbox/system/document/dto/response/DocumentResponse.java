@@ -12,12 +12,15 @@ import java.util.UUID;
 
 @Getter
 @Builder
-@JsonPropertyOrder({"id", "subjectId", "subjectCode", "subjectName", "title", "description", "documentType", "status", "totalPages", "totalChunks", "active", "createdAt", "updatedAt", "files"})
+@JsonPropertyOrder({"id", "subjectId", "subjectCode", "subjectName", "uploadedById", "uploadedByName", "uploadedByEmail", "title", "description", "documentType", "status", "totalPages", "totalChunks", "active", "createdAt", "updatedAt", "files"})
 public class DocumentResponse {
     private UUID id;
     private UUID subjectId;
     private String subjectCode;
     private String subjectName;
+    private UUID uploadedById;
+    private String uploadedByName;
+    private String uploadedByEmail;
     private String title;
     private String description;
     private DocumentType documentType;

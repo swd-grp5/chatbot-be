@@ -7,6 +7,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import swdchatbox.system.enrollment.repository.EnrollmentSpecifications;
+import swdchatbox.system.enrollment.service.SubjectEnrollmentService;
 import swdchatbox.system.common.dto.PageResponse;
 import swdchatbox.system.common.exception.BadRequestException;
 import swdchatbox.system.common.exception.ResourceNotFoundException;
@@ -19,11 +21,14 @@ import swdchatbox.system.lecturer.mapper.LecturerMapper;
 import swdchatbox.system.role.RoleCodes;
 import swdchatbox.system.role.entity.Role;
 import swdchatbox.system.role.service.RoleService;
+import swdchatbox.system.subject.dto.response.SubjectSummaryResponse;
 import swdchatbox.system.user.entity.User;
 import swdchatbox.system.user.enums.AuthProvider;
 import swdchatbox.system.user.repository.UserRepository;
 import swdchatbox.system.user.repository.UserSpecifications;
 
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -34,18 +39,29 @@ public class LecturerService {
     private final RoleService roleService;
     private final PasswordEncoder passwordEncoder;
     private final DocumentRepository documentRepository;
+    private final SubjectEnrollmentService subjectEnrollmentService;
 
     public PageResponse<LecturerResponse> findAll(LecturerFilterRequest filter, Pageable pageable) {
         Specification<User> spec = Specification
                 .where(UserSpecifications.hasRoleCode(RoleCodes.LECTURER))
                 .and(UserSpecifications.hasActive(filter != null ? filter.getActive() : null))
                 .and(UserSpecifications.keywordLike(filter != null ? filter.getKeyword() : null))
+                .and(EnrollmentSpecifications.lecturerEnrolledInSubject(filter != null ? filter.getSubjectId() : null))
                 .and(UserSpecifications.createdAfter(filter != null ? filter.getCreatedFrom() : null))
                 .and(UserSpecifications.createdBefore(filter != null ? filter.getCreatedTo() : null));
 
         Page<User> page = userRepository.findAll(spec, pageable);
+        List<UUID> lecturerIds = page.getContent().stream().map(User::getId).toList();
+        Map<UUID, List<SubjectSummaryResponse>> subjectsByLecturer =
+                subjectEnrollmentService.getLecturerSubjectsByLecturerIds(lecturerIds);
+
         return PageResponse.<LecturerResponse>builder()
-                .content(page.getContent().stream().map(LecturerMapper::toResponse).toList())
+                .content(page.getContent().stream()
+                        .map(user -> LecturerMapper.toResponse(
+                                user,
+                                subjectsByLecturer.getOrDefault(user.getId(), List.of())
+                        ))
+                        .toList())
                 .page(page.getNumber())
                 .pageSize(page.getSize())
                 .totalElements(page.getTotalElements())
@@ -57,7 +73,17 @@ public class LecturerService {
     }
 
     public LecturerResponse findById(UUID id) {
-        return LecturerMapper.toResponse(findLecturer(id));
+        User lecturer = findLecturer(id);
+        return LecturerMapper.toResponse(lecturer, subjectEnrollmentService.getLecturerSubjects(id));
+    }
+
+    public List<SubjectSummaryResponse> findMyUploadSubjects(String email) {
+        User lecturer = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        if (!RoleCodes.LECTURER.equals(lecturer.getRole().getCode())) {
+            throw new BadRequestException("Only lecturers can view upload subjects");
+        }
+        return subjectEnrollmentService.getLecturerSubjects(lecturer.getId());
     }
 
     @Transactional
@@ -76,7 +102,9 @@ public class LecturerService {
                 .emailVerified(request.getEmailVerified() != null ? request.getEmailVerified() : true)
                 .build();
 
-        return LecturerMapper.toResponse(userRepository.save(user));
+        user = userRepository.save(user);
+        subjectEnrollmentService.replaceLecturerSubjects(user, request.getSubjectIds());
+        return LecturerMapper.toResponse(user, subjectEnrollmentService.getLecturerSubjects(user.getId()));
     }
 
     @Transactional
@@ -115,7 +143,13 @@ public class LecturerService {
             user.setEmailVerified(request.getEmailVerified());
         }
 
-        return LecturerMapper.toResponse(userRepository.save(user));
+        user = userRepository.save(user);
+
+        if (request.getSubjectIds() != null) {
+            subjectEnrollmentService.replaceLecturerSubjects(user, request.getSubjectIds());
+        }
+
+        return LecturerMapper.toResponse(user, subjectEnrollmentService.getLecturerSubjects(user.getId()));
     }
 
     @Transactional
@@ -126,6 +160,7 @@ public class LecturerService {
             throw new BadRequestException("Cannot delete lecturer that has uploaded documents");
         }
 
+        subjectEnrollmentService.deleteLecturerSubjects(id);
         userRepository.delete(user);
     }
 
@@ -133,7 +168,8 @@ public class LecturerService {
     public LecturerResponse toggleActive(UUID id) {
         User user = findLecturer(id);
         user.setIsActive(user.getIsActive() == null || !user.getIsActive());
-        return LecturerMapper.toResponse(userRepository.save(user));
+        user = userRepository.save(user);
+        return LecturerMapper.toResponse(user, subjectEnrollmentService.getLecturerSubjects(user.getId()));
     }
 
     private User findLecturer(UUID id) {

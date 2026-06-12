@@ -35,16 +35,19 @@ import swdchatbox.system.document.repository.DocumentSpecifications;
 import swdchatbox.system.embedding.entity.EmbeddingRecord;
 import swdchatbox.system.embedding.repository.EmbeddingRecordRepository;
 import swdchatbox.system.embedding.service.VectorStoreService;
+import swdchatbox.system.enrollment.service.SubjectEnrollmentService;
 import swdchatbox.system.ingestion.repository.IngestionJobRepository;
+import swdchatbox.system.role.RoleCodes;
 import swdchatbox.system.subject.entity.Subject;
-import swdchatbox.system.subject.repository.SubjectRepository;
 import swdchatbox.system.user.entity.User;
 import swdchatbox.system.user.repository.UserRepository;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.util.Set;
 import java.util.UUID;
@@ -65,8 +68,8 @@ public class DocumentService {
     private final EmbeddingRecordRepository embeddingRecordRepository;
     private final MessageCitationRepository messageCitationRepository;
     private final IngestionJobRepository ingestionJobRepository;
-    private final SubjectRepository subjectRepository;
     private final UserRepository userRepository;
+    private final SubjectEnrollmentService subjectEnrollmentService;
     private final DocumentStorageService documentStorageService;
     private final DocumentIndexJobService documentIndexJobService;
     private final DocumentPageCountService documentPageCountService;
@@ -74,25 +77,34 @@ public class DocumentService {
     private final VectorStoreService vectorStoreService;
 
     @Transactional
-    public List<DocumentResponse> upload(List<DocumentUploadRequest> items, List<MultipartFile> files, String userEmail) {
+    public List<DocumentResponse> upload(List<DocumentUploadRequest> items, List<MultipartFile> files, UUID subjectId, String userEmail) {
         List<MultipartFile> validFiles = getValidFiles(files);
-        log.info("[upload] step=validate validFileCount={} userEmail={}", validFiles.size(), userEmail);
         validateUploadFiles(validFiles);
 
         List<DocumentUploadRequest> metadata = normalizeMetadata(items, validFiles.size());
-        Subject subject = findDefaultSubject();
-        User uploadedBy = resolveUploadedBy(userEmail);
+        List<UUID> resolvedSubjectIds = resolveUploadSubjectIds(subjectId, metadata);
+        log.info("[upload] step=validate validFileCount={} userEmail={} subjectCount={}",
+                validFiles.size(), userEmail, new LinkedHashSet<>(resolvedSubjectIds).size());
 
-        validateUploadBatch(subject, validFiles, metadata);
-        log.info("[upload] step=batch-validated subjectId={} uploadedBy={}", subject.getId(), userEmail);
+        User uploadedBy = resolveUploader(userEmail);
+        Map<UUID, Subject> subjectsById = new HashMap<>();
+        for (UUID resolvedSubjectId : new LinkedHashSet<>(resolvedSubjectIds)) {
+            Subject subject = subjectEnrollmentService.findActiveSubject(resolvedSubjectId);
+            subjectEnrollmentService.requireLecturerCanUpload(uploadedBy, resolvedSubjectId);
+            subjectsById.put(resolvedSubjectId, subject);
+        }
+
+        validateUploadBatch(resolvedSubjectIds, validFiles, metadata);
+        log.info("[upload] step=batch-validated fileCount={} uploadedBy={}", validFiles.size(), userEmail);
 
         List<DocumentResponse> responses = new ArrayList<>();
         for (int i = 0; i < validFiles.size(); i++) {
             MultipartFile file = validFiles.get(i);
             DocumentUploadRequest item = metadata.get(i);
+            Subject subject = subjectsById.get(resolvedSubjectIds.get(i));
             String title = resolveTitle(item.getTitle(), List.of(file));
-            log.info("[upload] step=create-document index={} title={} fileName={} fileSize={} contentType={}",
-                    i, title, file.getOriginalFilename(), file.getSize(), file.getContentType());
+            log.info("[upload] step=create-document index={} subjectId={} title={} fileName={} fileSize={} contentType={}",
+                    i, subject.getId(), title, file.getOriginalFilename(), file.getSize(), file.getContentType());
 
             Document document = Document.builder()
                     .subject(subject)
@@ -175,15 +187,20 @@ public class DocumentService {
         );
     }
 
-    public PageResponse<DocumentResponse> findAll(DocumentFilterRequest filter, Pageable pageable) {
+    public PageResponse<DocumentResponse> findAll(DocumentFilterRequest filter, Pageable pageable, String userEmail) {
+        User currentUser = resolveCurrentUser(userEmail);
         Specification<Document> spec = Specification
                 .where(DocumentSpecifications.hasSubjectId(filter != null ? filter.getSubjectId() : null))
+                .and(DocumentSpecifications.hasSubjectCode(filter != null ? filter.getSubjectCode() : null))
+                .and(DocumentSpecifications.hasUploadedById(filter != null ? filter.getUploadedById() : null))
+                .and(DocumentSpecifications.uploadedByKeywordLike(filter != null ? filter.getUploadedBy() : null))
                 .and(DocumentSpecifications.hasDocumentType(filter != null ? filter.getDocumentType() : null))
                 .and(DocumentSpecifications.hasStatus(filter != null ? filter.getStatus() : null))
                 .and(DocumentSpecifications.hasActive(filter != null ? filter.getActive() : null))
                 .and(DocumentSpecifications.keywordLike(filter != null ? filter.getKeyword() : null))
                 .and(DocumentSpecifications.createdAfter(filter != null ? filter.getCreatedFrom() : null))
-                .and(DocumentSpecifications.createdBefore(filter != null ? filter.getCreatedTo() : null));
+                .and(DocumentSpecifications.createdBefore(filter != null ? filter.getCreatedTo() : null))
+                .and(DocumentSpecifications.subjectIdIn(resolveAccessibleSubjectIds(currentUser)));
 
         Page<DocumentResponse> page = documentRepository.findAll(spec, pageable).map(this::toResponse);
         return PageResponse.<DocumentResponse>builder()
@@ -381,6 +398,18 @@ public class DocumentService {
                 .toList();
     }
 
+    private List<UUID> resolveUploadSubjectIds(UUID defaultSubjectId, List<DocumentUploadRequest> metadata) {
+        List<UUID> resolved = new ArrayList<>(metadata.size());
+        for (DocumentUploadRequest item : metadata) {
+            UUID itemSubjectId = item.getSubjectId() != null ? item.getSubjectId() : defaultSubjectId;
+            if (itemSubjectId == null) {
+                throw new BadRequestException("Subject is required for each document");
+            }
+            resolved.add(itemSubjectId);
+        }
+        return resolved;
+    }
+
     private List<DocumentUploadRequest> normalizeMetadata(List<DocumentUploadRequest> items, int fileCount) {
         if (items == null || items.isEmpty()) {
             return java.util.stream.IntStream.range(0, fileCount)
@@ -393,19 +422,21 @@ public class DocumentService {
         return items;
     }
 
-    private void validateUploadBatch(Subject subject, List<MultipartFile> files, List<DocumentUploadRequest> metadata) {
-        Set<String> seenTitles = new HashSet<>();
+    private void validateUploadBatch(List<UUID> subjectIds, List<MultipartFile> files, List<DocumentUploadRequest> metadata) {
+        Map<UUID, Set<String>> seenTitlesBySubject = new HashMap<>();
         Set<String> seenChecksums = new HashSet<>();
 
         for (int i = 0; i < files.size(); i++) {
             MultipartFile file = files.get(i);
+            UUID subjectId = subjectIds.get(i);
             String title = resolveTitle(metadata.get(i).getTitle(), List.of(file));
             String normalizedTitle = title.toLowerCase(Locale.ROOT);
 
+            Set<String> seenTitles = seenTitlesBySubject.computeIfAbsent(subjectId, ignored -> new HashSet<>());
             if (!seenTitles.add(normalizedTitle)) {
-                throw new BadRequestException("Duplicate title in upload request: " + title);
+                throw new BadRequestException("Duplicate title in upload request for the same subject: " + title);
             }
-            if (documentRepository.existsBySubject_IdAndTitleIgnoreCase(subject.getId(), title)) {
+            if (documentRepository.existsBySubject_IdAndTitleIgnoreCase(subjectId, title)) {
                 throw new BadRequestException("Document with the same title already exists: " + title);
             }
 
@@ -419,11 +450,36 @@ public class DocumentService {
         }
     }
 
-    private User resolveUploadedBy(String userEmail) {
+    private User resolveUploader(String userEmail) {
+        if (userEmail == null || userEmail.isBlank()) {
+            throw new BadRequestException("Authenticated user is required to upload documents");
+        }
+        return userRepository.findByEmail(userEmail)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+    }
+
+    private User resolveCurrentUser(String userEmail) {
         if (userEmail == null || userEmail.isBlank()) {
             return null;
         }
         return userRepository.findByEmail(userEmail).orElse(null);
+    }
+
+    private List<UUID> resolveAccessibleSubjectIds(User user) {
+        if (user == null || user.getRole() == null) {
+            return null;
+        }
+        String roleCode = user.getRole().getCode();
+        if (RoleCodes.ADMIN.equals(roleCode)) {
+            return null;
+        }
+        if (RoleCodes.LECTURER.equals(roleCode)) {
+            return subjectEnrollmentService.getLecturerSubjectIds(user.getId());
+        }
+        if (RoleCodes.STUDENT.equals(roleCode)) {
+            return subjectEnrollmentService.getStudentSubjectIds(user.getId());
+        }
+        return List.of();
     }
 
     private void saveFiles(Document document, List<MultipartFile> files) {
@@ -463,11 +519,6 @@ public class DocumentService {
             documentFileRepository.save(documentFile);
             log.info("[upload] step=file-record-saved documentId={} fileId={}", document.getId(), documentFile.getId());
         }
-    }
-
-    private Subject findDefaultSubject() {
-        return subjectRepository.findByCode("SWD")
-                .orElseThrow(() -> new ResourceNotFoundException("Default subject not found"));
     }
 
     private Document findDocument(UUID id) {

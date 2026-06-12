@@ -12,6 +12,9 @@ import java.util.UUID;
 @Setter
 public class DocumentFilterRequest {
     private UUID subjectId;
+    private String subjectCode;
+    private UUID uploadedById;
+    private String uploadedBy;
     private DocumentType documentType;
     private DocumentStatus status;
     private Boolean active;
