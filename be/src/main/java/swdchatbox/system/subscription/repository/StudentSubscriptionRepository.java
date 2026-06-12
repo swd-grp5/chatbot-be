@@ -36,4 +36,6 @@ public interface StudentSubscriptionRepository extends JpaRepository<StudentSubs
             UUID studentId,
             Boolean active
     );
+
+    boolean existsByStudent_Id(UUID studentId);
 }

@@ -18,4 +18,6 @@ public interface DocumentRepository extends JpaRepository<Document, UUID>, JpaSp
     boolean existsBySubject_IdAndTitleIgnoreCase(UUID subjectId, String title);
 
     boolean existsBySubject_IdAndTitleIgnoreCaseAndIdNot(UUID subjectId, String title, UUID id);
+
+    boolean existsByUploadedBy_Id(UUID uploadedById);
 }
