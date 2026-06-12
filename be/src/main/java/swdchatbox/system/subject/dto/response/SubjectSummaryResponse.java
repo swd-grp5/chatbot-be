@@ -6,10 +6,11 @@ import lombok.Builder;
 import java.util.UUID;
 
 @Builder
-@JsonPropertyOrder({"id", "code", "name"})
+@JsonPropertyOrder({"id", "code", "name", "totalDocuments"})
 public record SubjectSummaryResponse(
         UUID id,
         String code,
-        String name
+        String name,
+        long totalDocuments
 ) {
 }

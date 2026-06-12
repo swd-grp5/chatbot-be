@@ -9,6 +9,7 @@ import swdchatbox.system.enrollment.repository.LecturerSubjectRepository;
 import swdchatbox.system.enrollment.repository.StudentSubjectRepository;
 import swdchatbox.system.common.exception.BadRequestException;
 import swdchatbox.system.common.exception.ResourceNotFoundException;
+import swdchatbox.system.document.repository.DocumentRepository;
 import swdchatbox.system.role.RoleCodes;
 import swdchatbox.system.subject.dto.response.SubjectSummaryResponse;
 import swdchatbox.system.subject.entity.Subject;
@@ -25,6 +26,7 @@ public class SubjectEnrollmentService {
     private final StudentSubjectRepository studentSubjectRepository;
     private final LecturerSubjectRepository lecturerSubjectRepository;
     private final SubjectRepository subjectRepository;
+    private final DocumentRepository documentRepository;
 
     @Transactional
     public void replaceStudentSubjects(User student, List<UUID> subjectIds) {
@@ -89,14 +91,20 @@ public class SubjectEnrollmentService {
     }
 
     public List<SubjectSummaryResponse> getStudentSubjects(UUID studentId) {
-        return studentSubjectRepository.findSubjectsByStudent_Id(studentId).stream()
-                .map(this::toSummary)
+        List<Subject> subjects = studentSubjectRepository.findSubjectsByStudent_Id(studentId);
+        Map<UUID, Long> documentCounts = getDocumentCountsBySubjectIds(
+                subjects.stream().map(Subject::getId).toList());
+        return subjects.stream()
+                .map(subject -> toSummary(subject, documentCounts))
                 .toList();
     }
 
     public List<SubjectSummaryResponse> getLecturerSubjects(UUID lecturerId) {
-        return lecturerSubjectRepository.findSubjectsByLecturer_Id(lecturerId).stream()
-                .map(this::toSummary)
+        List<Subject> subjects = lecturerSubjectRepository.findSubjectsByLecturer_Id(lecturerId);
+        Map<UUID, Long> documentCounts = getDocumentCountsBySubjectIds(
+                subjects.stream().map(Subject::getId).toList());
+        return subjects.stream()
+                .map(subject -> toSummary(subject, documentCounts))
                 .toList();
     }
 
@@ -104,10 +112,13 @@ public class SubjectEnrollmentService {
         if (studentIds == null || studentIds.isEmpty()) {
             return Map.of();
         }
-        return studentSubjectRepository.findAllByStudent_IdIn(studentIds).stream()
+        List<StudentSubject> enrollments = studentSubjectRepository.findAllByStudent_IdIn(studentIds);
+        Map<UUID, Long> documentCounts = getDocumentCountsBySubjectIds(
+                enrollments.stream().map(ss -> ss.getSubject().getId()).distinct().toList());
+        return enrollments.stream()
                 .collect(Collectors.groupingBy(
                         ss -> ss.getStudent().getId(),
-                        Collectors.mapping(ss -> toSummary(ss.getSubject()), Collectors.toList())
+                        Collectors.mapping(ss -> toSummary(ss.getSubject(), documentCounts), Collectors.toList())
                 ));
     }
 
@@ -115,10 +126,13 @@ public class SubjectEnrollmentService {
         if (lecturerIds == null || lecturerIds.isEmpty()) {
             return Map.of();
         }
-        return lecturerSubjectRepository.findAllByLecturer_IdIn(lecturerIds).stream()
+        List<LecturerSubject> enrollments = lecturerSubjectRepository.findAllByLecturer_IdIn(lecturerIds);
+        Map<UUID, Long> documentCounts = getDocumentCountsBySubjectIds(
+                enrollments.stream().map(ls -> ls.getSubject().getId()).distinct().toList());
+        return enrollments.stream()
                 .collect(Collectors.groupingBy(
                         ls -> ls.getLecturer().getId(),
-                        Collectors.mapping(ls -> toSummary(ls.getSubject()), Collectors.toList())
+                        Collectors.mapping(ls -> toSummary(ls.getSubject(), documentCounts), Collectors.toList())
                 ));
     }
 
@@ -219,11 +233,23 @@ public class SubjectEnrollmentService {
         }
     }
 
-    private SubjectSummaryResponse toSummary(Subject subject) {
+    private Map<UUID, Long> getDocumentCountsBySubjectIds(Collection<UUID> subjectIds) {
+        if (subjectIds == null || subjectIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<UUID, Long> counts = new HashMap<>();
+        for (Object[] row : documentRepository.countBySubjectIds(subjectIds)) {
+            counts.put((UUID) row[0], (Long) row[1]);
+        }
+        return counts;
+    }
+
+    private SubjectSummaryResponse toSummary(Subject subject, Map<UUID, Long> documentCounts) {
         return SubjectSummaryResponse.builder()
                 .id(subject.getId())
                 .code(subject.getCode())
                 .name(subject.getName())
+                .totalDocuments(documentCounts.getOrDefault(subject.getId(), 0L))
                 .build();
     }
 }
