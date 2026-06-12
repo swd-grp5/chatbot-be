@@ -27,4 +27,6 @@ public interface LecturerSubjectRepository extends JpaRepository<LecturerSubject
     boolean existsByLecturer_IdAndSubject_Id(UUID lecturerId, UUID subjectId);
 
     void deleteAllByLecturer_Id(UUID lecturerId);
+
+    void deleteByLecturer_IdAndSubject_Id(UUID lecturerId, UUID subjectId);
 }

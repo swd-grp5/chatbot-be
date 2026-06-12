@@ -24,4 +24,6 @@ public interface StudentSubjectRepository extends JpaRepository<StudentSubject, 
     boolean existsByStudent_IdAndSubject_Id(UUID studentId, UUID subjectId);
 
     void deleteAllByStudent_Id(UUID studentId);
+
+    void deleteByStudent_IdAndSubject_Id(UUID studentId, UUID subjectId);
 }

@@ -148,7 +148,7 @@ public class StudentService {
         user = userRepository.save(user);
 
         if (request.getSubjectIds() != null) {
-            subjectEnrollmentService.replaceStudentSubjects(user, request.getSubjectIds());
+            subjectEnrollmentService.toggleStudentSubjects(user, request.getSubjectIds());
         }
 
         return StudentMapper.toResponse(user, subjectEnrollmentService.getStudentSubjects(user.getId()));

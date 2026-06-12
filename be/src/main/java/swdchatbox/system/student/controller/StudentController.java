@@ -77,7 +77,9 @@ public class StudentController {
         return ResponseEntity.ok(studentService.create(request));
     }
 
-    @Operation(summary = "Cập nhật sinh viên", description = "Admin chỉnh sửa thông tin student. Gửi `subjectIds` để thay toàn bộ danh sách môn (thêm/bớt môn: gửi list mới đầy đủ, tối thiểu 1 môn).")
+    @Operation(summary = "Cập nhật sinh viên", description = """
+            Admin chỉnh sửa thông tin student. `subjectIds` toggle từng môn: ID chưa gán thì thêm, ID đã gán thì gỡ.
+            Chỉ cần gửi môn cần đổi (vd. thêm 1 môn: `["uuid-moi"]`, gỡ 1 môn: `["uuid-cu"]`). Sau cập nhật phải còn ít nhất 1 môn.""")
     @PutMapping("/{id}")
     public ResponseEntity<StudentResponse> update(@PathVariable UUID id, @RequestBody StudentUpdateRequest request) {
         return ResponseEntity.ok(studentService.update(id, request));

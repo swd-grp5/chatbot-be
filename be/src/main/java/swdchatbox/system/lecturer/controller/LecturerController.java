@@ -77,7 +77,9 @@ public class LecturerController {
         return ResponseEntity.ok(lecturerService.create(request));
     }
 
-    @Operation(summary = "Cập nhật giảng viên", description = "Admin chỉnh sửa thông tin lecturer. Gửi `subjectIds` để thay toàn bộ danh sách môn (thêm/bớt môn: gửi list mới đầy đủ, tối thiểu 1 môn).")
+    @Operation(summary = "Cập nhật giảng viên", description = """
+            Admin chỉnh sửa thông tin lecturer. `subjectIds` toggle từng môn: ID chưa gán thì thêm, ID đã gán thì gỡ.
+            Chỉ cần gửi môn cần đổi (vd. thêm 1 môn: `["uuid-moi"]`, gỡ 1 môn: `["uuid-cu"]`). Sau cập nhật phải còn ít nhất 1 môn.""")
     @PutMapping("/{id}")
     public ResponseEntity<LecturerResponse> update(@PathVariable UUID id, @RequestBody LecturerUpdateRequest request) {
         return ResponseEntity.ok(lecturerService.update(id, request));

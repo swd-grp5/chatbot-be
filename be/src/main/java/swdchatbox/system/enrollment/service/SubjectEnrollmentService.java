@@ -30,13 +30,41 @@ public class SubjectEnrollmentService {
     public void replaceStudentSubjects(User student, List<UUID> subjectIds) {
         validateSubjectIds(subjectIds, true);
         studentSubjectRepository.deleteAllByStudent_Id(student.getId());
+        saveStudentSubjectEnrollments(student, subjectIds);
+    }
 
-        List<Subject> subjects = subjectRepository.findAllById(subjectIds);
-        for (Subject subject : subjects) {
-            studentSubjectRepository.save(StudentSubject.builder()
-                    .student(student)
-                    .subject(subject)
-                    .build());
+    @Transactional
+    public void toggleStudentSubjects(User student, List<UUID> subjectIds) {
+        if (subjectIds == null || subjectIds.isEmpty()) {
+            return;
+        }
+
+        Set<UUID> uniqueIds = new LinkedHashSet<>(subjectIds);
+        if (uniqueIds.size() != subjectIds.size()) {
+            throw new BadRequestException("Duplicate subject IDs are not allowed");
+        }
+
+        List<UUID> toAdd = new ArrayList<>();
+        List<UUID> toRemove = new ArrayList<>();
+        for (UUID subjectId : uniqueIds) {
+            if (studentSubjectRepository.existsByStudent_IdAndSubject_Id(student.getId(), subjectId)) {
+                toRemove.add(subjectId);
+            } else {
+                toAdd.add(subjectId);
+            }
+        }
+
+        if (!toAdd.isEmpty()) {
+            validateSubjectIds(toAdd, false);
+            saveStudentSubjectEnrollments(student, toAdd);
+        }
+
+        for (UUID subjectId : toRemove) {
+            studentSubjectRepository.deleteByStudent_IdAndSubject_Id(student.getId(), subjectId);
+        }
+
+        if (!studentSubjectRepository.existsByStudent_Id(student.getId())) {
+            throw new BadRequestException("At least one subject must be enrolled");
         }
     }
 
@@ -44,13 +72,41 @@ public class SubjectEnrollmentService {
     public void replaceLecturerSubjects(User lecturer, List<UUID> subjectIds) {
         validateSubjectIds(subjectIds, true);
         lecturerSubjectRepository.deleteAllByLecturer_Id(lecturer.getId());
+        saveLecturerSubjectEnrollments(lecturer, subjectIds);
+    }
 
-        List<Subject> subjects = subjectRepository.findAllById(subjectIds);
-        for (Subject subject : subjects) {
-            lecturerSubjectRepository.save(LecturerSubject.builder()
-                    .lecturer(lecturer)
-                    .subject(subject)
-                    .build());
+    @Transactional
+    public void toggleLecturerSubjects(User lecturer, List<UUID> subjectIds) {
+        if (subjectIds == null || subjectIds.isEmpty()) {
+            return;
+        }
+
+        Set<UUID> uniqueIds = new LinkedHashSet<>(subjectIds);
+        if (uniqueIds.size() != subjectIds.size()) {
+            throw new BadRequestException("Duplicate subject IDs are not allowed");
+        }
+
+        List<UUID> toAdd = new ArrayList<>();
+        List<UUID> toRemove = new ArrayList<>();
+        for (UUID subjectId : uniqueIds) {
+            if (lecturerSubjectRepository.existsByLecturer_IdAndSubject_Id(lecturer.getId(), subjectId)) {
+                toRemove.add(subjectId);
+            } else {
+                toAdd.add(subjectId);
+            }
+        }
+
+        if (!toAdd.isEmpty()) {
+            validateSubjectIds(toAdd, false);
+            saveLecturerSubjectEnrollments(lecturer, toAdd);
+        }
+
+        for (UUID subjectId : toRemove) {
+            lecturerSubjectRepository.deleteByLecturer_IdAndSubject_Id(lecturer.getId(), subjectId);
+        }
+
+        if (!lecturerSubjectRepository.existsByLecturer_Id(lecturer.getId())) {
+            throw new BadRequestException("At least one subject must be enrolled");
         }
     }
 
@@ -148,6 +204,26 @@ public class SubjectEnrollmentService {
             throw new BadRequestException("Subject is not active");
         }
         return subject;
+    }
+
+    private void saveStudentSubjectEnrollments(User student, List<UUID> subjectIds) {
+        List<Subject> subjects = subjectRepository.findAllById(subjectIds);
+        for (Subject subject : subjects) {
+            studentSubjectRepository.save(StudentSubject.builder()
+                    .student(student)
+                    .subject(subject)
+                    .build());
+        }
+    }
+
+    private void saveLecturerSubjectEnrollments(User lecturer, List<UUID> subjectIds) {
+        List<Subject> subjects = subjectRepository.findAllById(subjectIds);
+        for (Subject subject : subjects) {
+            lecturerSubjectRepository.save(LecturerSubject.builder()
+                    .lecturer(lecturer)
+                    .subject(subject)
+                    .build());
+        }
     }
 
     private void validateSubjectIds(List<UUID> subjectIds, boolean requireAtLeastOne) {
