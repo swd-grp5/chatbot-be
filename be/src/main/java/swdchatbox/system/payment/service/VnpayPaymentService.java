@@ -78,7 +78,8 @@ public class VnpayPaymentService {
 
         String paymentUrl = buildPaymentUrl(tx, bankCode, createDate, expireDate);
 
-        log.info("Created VNPAY top-up payment txnRef={} amount={} for {}", txnRef, amount, email);
+        log.info("[vnpay/top-up] txnRef={} amount={} email={} returnUrl={} paymentUrl={}",
+                txnRef, amount, email, vnpay.getReturnUrl(), paymentUrl);
 
         return PaymentInitResponse.builder()
                 .txnRef(txnRef)
@@ -119,6 +120,13 @@ public class VnpayPaymentService {
 
     @Transactional
     public IpnResponse handleIpn(Map<String, String> params) {
+        log.info("[vnpay/ipn] received txnRef={} responseCode={} transactionStatus={} amount={} paramKeys={}",
+                params.get("vnp_TxnRef"),
+                params.get("vnp_ResponseCode"),
+                params.get("vnp_TransactionStatus"),
+                params.get("vnp_Amount"),
+                params.keySet());
+
         if (!verifySignature(params)) {
             log.warn(
                     "VNPAY IPN invalid signature for txnRef={} receivedTmnCode={} configuredTmnCode={} "
@@ -178,6 +186,13 @@ public class VnpayPaymentService {
 
     @Transactional(readOnly = true)
     public PaymentReturnResponse handleReturn(Map<String, String> params) {
+        log.info("[vnpay/return] received txnRef={} responseCode={} transactionStatus={} returnUrl={} params={}",
+                params.get("vnp_TxnRef"),
+                params.get("vnp_ResponseCode"),
+                params.get("vnp_TransactionStatus"),
+                vnpay.getReturnUrl(),
+                params);
+
         boolean validSignature = verifySignature(params);
         String txnRef = params.get("vnp_TxnRef");
         String responseCode = params.get("vnp_ResponseCode");
@@ -187,6 +202,9 @@ public class VnpayPaymentService {
 
         boolean success = validSignature && "00".equals(responseCode)
                 && "00".equals(params.get("vnp_TransactionStatus"));
+
+        log.info("[vnpay/return] result txnRef={} validSignature={} success={} paymentStatus={}",
+                txnRef, validSignature, success, tx != null ? tx.getPaymentStatus() : null);
 
         return PaymentReturnResponse.builder()
                 .success(success)

@@ -1,12 +1,18 @@
 package swdchatbox.system.wallet.service;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import swdchatbox.system.common.dto.PageResponse;
 import swdchatbox.system.common.exception.BadRequestException;
 import swdchatbox.system.common.exception.ResourceNotFoundException;
 import swdchatbox.system.user.entity.User;
 import swdchatbox.system.user.repository.UserRepository;
+import swdchatbox.system.wallet.dto.request.WalletTransactionFilterRequest;
 import swdchatbox.system.wallet.dto.response.WalletResponse;
 import swdchatbox.system.wallet.dto.response.WalletTransactionResponse;
 import swdchatbox.system.wallet.entity.Wallet;
@@ -15,11 +21,13 @@ import swdchatbox.system.wallet.enums.WalletTransactionStatus;
 import swdchatbox.system.wallet.enums.WalletTransactionType;
 import swdchatbox.system.wallet.repository.WalletRepository;
 import swdchatbox.system.wallet.repository.WalletTransactionRepository;
+import swdchatbox.system.wallet.repository.WalletTransactionSpecifications;
 
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class WalletService {
@@ -41,10 +49,58 @@ public class WalletService {
     }
 
     @Transactional(readOnly = true)
-    public List<WalletTransactionResponse> getMyTransactionHistory(String email) {
+    public PageResponse<WalletTransactionResponse> getMyTransactionHistory(
+            String email,
+            WalletTransactionFilterRequest filter,
+            Pageable pageable
+    ) {
         User user = findUser(email);
-        return walletTransactionRepository.findAllByWallet_User_IdOrderByCreatedAtDesc(user.getId())
-                .stream().map(this::toTransactionResponse).toList();
+        WalletTransactionFilterRequest effectiveFilter = filter != null ? filter : new WalletTransactionFilterRequest();
+        effectiveFilter.setUserId(user.getId());
+
+        Specification<WalletTransaction> spec = Specification
+                .where(WalletTransactionSpecifications.belongsToUser(effectiveFilter.getUserId()))
+                .and(WalletTransactionSpecifications.hasId(effectiveFilter.getId()))
+                .and(WalletTransactionSpecifications.hasWalletId(effectiveFilter.getWalletId()))
+                .and(WalletTransactionSpecifications.hasTransactionType(effectiveFilter.getTransactionType()))
+                .and(WalletTransactionSpecifications.hasStatus(effectiveFilter.getStatus()))
+                .and(WalletTransactionSpecifications.hasReferenceId(effectiveFilter.getReferenceId()))
+                .and(WalletTransactionSpecifications.keywordLike(effectiveFilter.getKeyword()))
+                .and(WalletTransactionSpecifications.amountGreaterOrEqual(effectiveFilter.getAmountMin()))
+                .and(WalletTransactionSpecifications.amountLessOrEqual(effectiveFilter.getAmountMax()))
+                .and(WalletTransactionSpecifications.createdAfter(effectiveFilter.getCreatedFrom()))
+                .and(WalletTransactionSpecifications.createdBefore(effectiveFilter.getCreatedTo()));
+
+        Page<WalletTransactionResponse> page = walletTransactionRepository.findAll(spec, pageable)
+                .map(this::toTransactionResponse);
+
+        log.info("[wallet/transactions] email={} id={} walletId={} type={} status={} referenceId={} keyword={} "
+                        + "amountMin={} amountMax={} createdFrom={} createdTo={} page={} size={} totalElements={}",
+                email,
+                effectiveFilter.getId(),
+                effectiveFilter.getWalletId(),
+                effectiveFilter.getTransactionType(),
+                effectiveFilter.getStatus(),
+                effectiveFilter.getReferenceId(),
+                effectiveFilter.getKeyword(),
+                effectiveFilter.getAmountMin(),
+                effectiveFilter.getAmountMax(),
+                effectiveFilter.getCreatedFrom(),
+                effectiveFilter.getCreatedTo(),
+                page.getNumber(),
+                page.getSize(),
+                page.getTotalElements());
+
+        return PageResponse.<WalletTransactionResponse>builder()
+                .content(page.getContent())
+                .page(page.getNumber())
+                .pageSize(page.getSize())
+                .totalElements(page.getTotalElements())
+                .totalPages(page.getTotalPages())
+                .first(page.isFirst())
+                .last(page.isLast())
+                .empty(page.isEmpty())
+                .build();
     }
 
     @Transactional
