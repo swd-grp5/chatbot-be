@@ -54,7 +54,7 @@ public class WalletController {
             @RequestParam(required = false) UUID id,
             @Parameter(description = "Lọc theo walletId")
             @RequestParam(required = false) UUID walletId,
-            @Parameter(description = "Lọc theo loại giao dịch: TOP_UP, SUBSCRIPTION_PAYMENT, REFUND, ADJUSTMENT")
+            @Parameter(description = "Lọc theo loại giao dịch: TOP_UP, SUBSCRIPTION_PAYMENT, REFUND")
             @RequestParam(required = false) WalletTransactionType transactionType,
             @Parameter(description = "Lọc theo trạng thái: PENDING, SUCCESS, FAILED")
             @RequestParam(required = false) WalletTransactionStatus status,
