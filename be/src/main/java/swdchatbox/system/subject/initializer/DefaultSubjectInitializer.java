@@ -2,12 +2,14 @@ package swdchatbox.system.subject.initializer;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import swdchatbox.system.subject.entity.Subject;
 import swdchatbox.system.subject.repository.SubjectRepository;
 
 @Component
+@Order(4)
 @RequiredArgsConstructor
 public class DefaultSubjectInitializer implements CommandLineRunner {
 

@@ -17,6 +17,25 @@ public final class SchemaMigrationSupport {
     private SchemaMigrationSupport() {
     }
 
+    public static void ensureUserSubjectsTable(JdbcTemplate jdbc) {
+        if (tableExists(jdbc, "user_subjects")) {
+            return;
+        }
+        jdbc.execute("""
+                CREATE TABLE user_subjects (
+                    id BINARY(16) NOT NULL,
+                    user_id BINARY(16) NOT NULL,
+                    subject_id BINARY(16) NOT NULL,
+                    created_at DATETIME(6) NULL,
+                    PRIMARY KEY (id),
+                    UNIQUE KEY uk_user_subject (user_id, subject_id),
+                    KEY idx_user_subject_user (user_id),
+                    KEY idx_user_subject_subject (subject_id)
+                )
+                """);
+        log.info("Created missing table user_subjects");
+    }
+
     public static void fixUserRoleIds(JdbcTemplate jdbc) {
         if (!tableExists(jdbc, "roles") || !tableExists(jdbc, "users")) {
             return;

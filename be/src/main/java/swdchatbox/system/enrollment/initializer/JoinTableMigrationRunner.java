@@ -20,6 +20,7 @@ public class JoinTableMigrationRunner implements CommandLineRunner {
     @Override
     @Transactional
     public void run(String... args) {
+        SchemaMigrationSupport.ensureUserSubjectsTable(jdbcTemplate);
         migrateUserSubjectAssignments();
         migrateStudentSubscriptions();
         migrateInvoiceSubscriptionLink();
@@ -303,7 +304,6 @@ public class JoinTableMigrationRunner implements CommandLineRunner {
     private void dropLegacySchemaArtifacts() {
         dropTableIfExists("student_subjects");
         dropTableIfExists("lecturer_subjects");
-        dropTableIfExists("user_subjects");
         dropTableIfExists("student_subscriptions");
 
         dropColumnIfExists("invoices", "payment_id");
