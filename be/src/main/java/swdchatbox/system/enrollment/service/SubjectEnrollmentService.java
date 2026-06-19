@@ -188,7 +188,7 @@ public class SubjectEnrollmentService {
 
         Map<UUID, List<SubjectSummaryResponse>> result = new HashMap<>();
         for (UUID userId : userIds) {
-            result.put(userId, List.of());
+            result.put(userId, new ArrayList<>());
         }
 
         for (UserSubject assignment : assignments) {
