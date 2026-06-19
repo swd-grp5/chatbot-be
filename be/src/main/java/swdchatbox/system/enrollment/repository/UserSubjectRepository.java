@@ -31,16 +31,4 @@ public interface UserSubjectRepository extends JpaRepository<UserSubject, UUID> 
             """)
     Optional<UserSubject> findLecturerAssignmentBySubjectId(@Param("subjectId") UUID subjectId);
 
-    @Query("""
-            SELECT us FROM UserSubject us
-            JOIN us.user u
-            JOIN u.role r
-            WHERE us.subject.id = :subjectId
-              AND r.code = 'LECTURER'
-              AND u.id <> :keepUserId
-            """)
-    List<UserSubject> findOtherLecturerAssignments(
-            @Param("subjectId") UUID subjectId,
-            @Param("keepUserId") UUID keepUserId
-    );
 }

@@ -76,7 +76,7 @@ public class SubjectEnrollmentService {
     @Transactional
     public void assignUserToSubject(Subject subject, User user) {
         validateLecturer(user);
-        unassignOtherLecturersFromSubject(subject.getId(), user.getId());
+        ensureSubjectAvailableForLecturer(subject.getId(), user.getId());
         ensureAssignment(user, subject);
     }
 
@@ -205,7 +205,7 @@ public class SubjectEnrollmentService {
     }
 
     private void assignLecturerToSubject(User lecturer, UUID subjectId) {
-        unassignOtherLecturersFromSubject(subjectId, lecturer.getId());
+        ensureSubjectAvailableForLecturer(subjectId, lecturer.getId());
         Subject subject = findActiveSubject(subjectId);
         ensureAssignment(lecturer, subject);
     }
@@ -220,9 +220,19 @@ public class SubjectEnrollmentService {
                 .build());
     }
 
-    private void unassignOtherLecturersFromSubject(UUID subjectId, UUID keepUserId) {
-        List<UserSubject> others = userSubjectRepository.findOtherLecturerAssignments(subjectId, keepUserId);
-        userSubjectRepository.deleteAll(others);
+    private void ensureSubjectAvailableForLecturer(UUID subjectId, UUID lecturerId) {
+        userSubjectRepository.findLecturerAssignmentBySubjectId(subjectId)
+                .ifPresent(existing -> {
+                    if (!existing.getUser().getId().equals(lecturerId)) {
+                        Subject subject = existing.getSubject();
+                        User assignedLecturer = existing.getUser();
+                        throw new BadRequestException(
+                                "Subject " + subject.getCode()
+                                        + " is already assigned to lecturer "
+                                        + assignedLecturer.getFullName()
+                        );
+                    }
+                });
     }
 
     private List<UUID> getAssignedSubjectIds(UUID userId) {
