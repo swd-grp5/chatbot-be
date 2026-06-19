@@ -3,18 +3,17 @@ package swdchatbox.system.enrollment.service;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import swdchatbox.system.enrollment.entity.LecturerSubject;
-import swdchatbox.system.enrollment.entity.StudentSubject;
-import swdchatbox.system.enrollment.repository.LecturerSubjectRepository;
-import swdchatbox.system.enrollment.repository.StudentSubjectRepository;
 import swdchatbox.system.common.exception.BadRequestException;
 import swdchatbox.system.common.exception.ResourceNotFoundException;
 import swdchatbox.system.document.repository.DocumentRepository;
+import swdchatbox.system.enrollment.entity.UserSubject;
+import swdchatbox.system.enrollment.repository.UserSubjectRepository;
 import swdchatbox.system.role.RoleCodes;
 import swdchatbox.system.subject.dto.response.SubjectSummaryResponse;
 import swdchatbox.system.subject.entity.Subject;
 import swdchatbox.system.subject.repository.SubjectRepository;
 import swdchatbox.system.user.entity.User;
+import swdchatbox.system.user.repository.UserRepository;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -23,117 +22,83 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class SubjectEnrollmentService {
 
-    private final StudentSubjectRepository studentSubjectRepository;
-    private final LecturerSubjectRepository lecturerSubjectRepository;
+    private final UserRepository userRepository;
     private final SubjectRepository subjectRepository;
+    private final UserSubjectRepository userSubjectRepository;
     private final DocumentRepository documentRepository;
 
     @Transactional
     public void replaceStudentSubjects(User student, List<UUID> subjectIds) {
-        validateSubjectIds(subjectIds, true);
-        studentSubjectRepository.deleteAllByStudent_Id(student.getId());
-        saveStudentSubjectEnrollments(student, subjectIds);
+        validateStudent(student);
+        replaceUserSubjects(student, subjectIds);
     }
 
-    /** Đồng bộ danh sách môn: mảng gửi lên = danh sách cuối cùng (thêm thiếu, gỡ dư). */
     @Transactional
     public void syncStudentSubjects(User student, List<UUID> subjectIds) {
-        validateSubjectIds(subjectIds, true);
-        Set<UUID> targetIds = new LinkedHashSet<>(subjectIds);
-        Set<UUID> currentIds = new HashSet<>(getStudentSubjectIds(student.getId()));
-
-        for (UUID subjectId : currentIds) {
-            if (!targetIds.contains(subjectId)) {
-                studentSubjectRepository.deleteByStudent_IdAndSubject_Id(student.getId(), subjectId);
-            }
-        }
-
-        List<UUID> toAdd = targetIds.stream().filter(id -> !currentIds.contains(id)).toList();
-        if (!toAdd.isEmpty()) {
-            saveStudentSubjectEnrollments(student, toAdd);
-        }
+        validateStudent(student);
+        syncUserSubjects(student, subjectIds);
     }
 
     @Transactional
     public void replaceLecturerSubjects(User lecturer, List<UUID> subjectIds) {
-        validateSubjectIds(subjectIds, true);
-        lecturerSubjectRepository.deleteAllByLecturer_Id(lecturer.getId());
-        saveLecturerSubjectEnrollments(lecturer, subjectIds);
+        syncLecturerSubjects(lecturer, subjectIds);
     }
 
-    /** Đồng bộ danh sách môn: mảng gửi lên = danh sách cuối cùng (thêm thiếu, gỡ dư). */
     @Transactional
     public void syncLecturerSubjects(User lecturer, List<UUID> subjectIds) {
+        validateLecturer(lecturer);
         validateSubjectIds(subjectIds, true);
-        Set<UUID> targetIds = new LinkedHashSet<>(subjectIds);
-        Set<UUID> currentIds = new HashSet<>(getLecturerSubjectIds(lecturer.getId()));
 
-        for (UUID subjectId : currentIds) {
-            if (!targetIds.contains(subjectId)) {
-                lecturerSubjectRepository.deleteByLecturer_IdAndSubject_Id(lecturer.getId(), subjectId);
+        Set<UUID> targetIds = new LinkedHashSet<>(subjectIds);
+        List<UserSubject> current = userSubjectRepository.findAllByUser_IdOrderBySubject_NameAsc(lecturer.getId());
+
+        for (UserSubject assignment : current) {
+            if (!targetIds.contains(assignment.getSubject().getId())) {
+                userSubjectRepository.delete(assignment);
             }
         }
 
-        List<UUID> toAdd = targetIds.stream().filter(id -> !currentIds.contains(id)).toList();
-        if (!toAdd.isEmpty()) {
-            saveLecturerSubjectEnrollments(lecturer, toAdd);
+        for (UUID subjectId : targetIds) {
+            assignLecturerToSubject(lecturer, subjectId);
         }
     }
 
     @Transactional
-    public void deleteStudentSubjects(UUID studentId) {
-        studentSubjectRepository.deleteAllByStudent_Id(studentId);
+    public void deleteStudentSubjects(UUID userId) {
+        userSubjectRepository.deleteAllByUser_Id(userId);
     }
 
     @Transactional
-    public void deleteLecturerSubjects(UUID lecturerId) {
-        lecturerSubjectRepository.deleteAllByLecturer_Id(lecturerId);
+    public void deleteLecturerSubjects(UUID userId) {
+        userSubjectRepository.deleteAllByUser_Id(userId);
     }
 
-    public List<SubjectSummaryResponse> getStudentSubjects(UUID studentId) {
-        List<Subject> subjects = studentSubjectRepository.findSubjectsByStudent_Id(studentId);
-        Map<UUID, Long> documentCounts = getDocumentCountsBySubjectIds(
-                subjects.stream().map(Subject::getId).toList());
-        return subjects.stream()
-                .map(subject -> toSummary(subject, documentCounts))
-                .toList();
+    @Transactional
+    public void assignUserToSubject(Subject subject, User user) {
+        validateLecturer(user);
+        unassignOtherLecturersFromSubject(subject.getId(), user.getId());
+        ensureAssignment(user, subject);
     }
 
-    public List<SubjectSummaryResponse> getLecturerSubjects(UUID lecturerId) {
-        List<Subject> subjects = lecturerSubjectRepository.findSubjectsByLecturer_Id(lecturerId);
-        Map<UUID, Long> documentCounts = getDocumentCountsBySubjectIds(
-                subjects.stream().map(Subject::getId).toList());
-        return subjects.stream()
-                .map(subject -> toSummary(subject, documentCounts))
-                .toList();
+    public Optional<User> findAssignedLecturerForSubject(UUID subjectId) {
+        return userSubjectRepository.findLecturerAssignmentBySubjectId(subjectId)
+                .map(UserSubject::getUser);
     }
 
-    public Map<UUID, List<SubjectSummaryResponse>> getStudentSubjectsByStudentIds(List<UUID> studentIds) {
-        if (studentIds == null || studentIds.isEmpty()) {
-            return Map.of();
-        }
-        List<StudentSubject> enrollments = studentSubjectRepository.findAllByStudent_IdIn(studentIds);
-        Map<UUID, Long> documentCounts = getDocumentCountsBySubjectIds(
-                enrollments.stream().map(ss -> ss.getSubject().getId()).distinct().toList());
-        return enrollments.stream()
-                .collect(Collectors.groupingBy(
-                        ss -> ss.getStudent().getId(),
-                        Collectors.mapping(ss -> toSummary(ss.getSubject(), documentCounts), Collectors.toList())
-                ));
+    public List<SubjectSummaryResponse> getStudentSubjects(UUID userId) {
+        return toSummariesFromAssignments(userSubjectRepository.findAllByUser_IdOrderBySubject_NameAsc(userId));
+    }
+
+    public List<SubjectSummaryResponse> getLecturerSubjects(UUID userId) {
+        return getStudentSubjects(userId);
+    }
+
+    public Map<UUID, List<SubjectSummaryResponse>> getStudentSubjectsByStudentIds(List<UUID> userIds) {
+        return getSubjectsByUserIds(userIds);
     }
 
     public Map<UUID, List<SubjectSummaryResponse>> getLecturerSubjectsByLecturerIds(List<UUID> lecturerIds) {
-        if (lecturerIds == null || lecturerIds.isEmpty()) {
-            return Map.of();
-        }
-        List<LecturerSubject> enrollments = lecturerSubjectRepository.findAllByLecturer_IdIn(lecturerIds);
-        Map<UUID, Long> documentCounts = getDocumentCountsBySubjectIds(
-                enrollments.stream().map(ls -> ls.getSubject().getId()).distinct().toList());
-        return enrollments.stream()
-                .collect(Collectors.groupingBy(
-                        ls -> ls.getLecturer().getId(),
-                        Collectors.mapping(ls -> toSummary(ls.getSubject(), documentCounts), Collectors.toList())
-                ));
+        return getSubjectsByUserIds(lecturerIds);
     }
 
     public void requireLecturerCanUpload(User user, UUID subjectId) {
@@ -146,9 +111,10 @@ public class SubjectEnrollmentService {
         if (!RoleCodes.LECTURER.equals(user.getRole().getCode())) {
             throw new BadRequestException("Only lecturers can upload documents");
         }
-        if (!lecturerSubjectRepository.existsByLecturer_IdAndSubject_Id(user.getId(), subjectId)) {
-            throw new BadRequestException("You are not enrolled to upload documents for this subject");
+        if (!userSubjectRepository.existsByUser_IdAndSubject_Id(user.getId(), subjectId)) {
+            throw new BadRequestException("You are not assigned to upload documents for this subject");
         }
+        findActiveSubject(subjectId);
     }
 
     public void requireStudentCanAccessSubject(User user, UUID subjectId) {
@@ -164,19 +130,17 @@ public class SubjectEnrollmentService {
         if (subjectId == null) {
             throw new BadRequestException("Subject is required");
         }
-        if (!studentSubjectRepository.existsByStudent_IdAndSubject_Id(user.getId(), subjectId)) {
+        if (!userSubjectRepository.existsByUser_IdAndSubject_Id(user.getId(), subjectId)) {
             throw new BadRequestException("You are not enrolled in this subject");
         }
     }
 
-    public List<UUID> getLecturerSubjectIds(UUID lecturerId) {
-        return lecturerSubjectRepository.findSubjectIdsByLecturer_Id(lecturerId);
+    public List<UUID> getLecturerSubjectIds(UUID userId) {
+        return getAssignedSubjectIds(userId);
     }
 
-    public List<UUID> getStudentSubjectIds(UUID studentId) {
-        return studentSubjectRepository.findSubjectsByStudent_Id(studentId).stream()
-                .map(Subject::getId)
-                .toList();
+    public List<UUID> getStudentSubjectIds(UUID userId) {
+        return getAssignedSubjectIds(userId);
     }
 
     public Subject findActiveSubject(UUID subjectId) {
@@ -188,30 +152,118 @@ public class SubjectEnrollmentService {
         return subject;
     }
 
-    private void saveStudentSubjectEnrollments(User student, List<UUID> subjectIds) {
-        List<Subject> subjects = subjectRepository.findAllById(subjectIds);
-        for (Subject subject : subjects) {
-            studentSubjectRepository.save(StudentSubject.builder()
-                    .student(student)
-                    .subject(subject)
-                    .build());
+    @Transactional
+    public void replaceUserSubjects(User user, List<UUID> subjectIds) {
+        validateSubjectIds(subjectIds, true);
+        userSubjectRepository.deleteAllByUser_Id(user.getId());
+        for (UUID subjectId : new LinkedHashSet<>(subjectIds)) {
+            Subject subject = findActiveSubject(subjectId);
+            ensureAssignment(user, subject);
         }
     }
 
-    private void saveLecturerSubjectEnrollments(User lecturer, List<UUID> subjectIds) {
-        List<Subject> subjects = subjectRepository.findAllById(subjectIds);
-        for (Subject subject : subjects) {
-            lecturerSubjectRepository.save(LecturerSubject.builder()
-                    .lecturer(lecturer)
-                    .subject(subject)
-                    .build());
+    @Transactional
+    public void syncUserSubjects(User user, List<UUID> subjectIds) {
+        replaceUserSubjects(user, subjectIds);
+    }
+
+    public List<SubjectSummaryResponse> getUserSubjects(UUID userId) {
+        return toSummariesFromAssignments(userSubjectRepository.findAllByUser_IdOrderBySubject_NameAsc(userId));
+    }
+
+    public Map<UUID, List<SubjectSummaryResponse>> getUserSubjectsByUserIds(List<UUID> userIds) {
+        return getSubjectsByUserIds(userIds);
+    }
+
+    private Map<UUID, List<SubjectSummaryResponse>> getSubjectsByUserIds(List<UUID> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return Map.of();
+        }
+
+        List<UserSubject> assignments = userSubjectRepository.findAllByUser_IdIn(userIds);
+        Set<UUID> subjectIds = assignments.stream()
+                .map(assignment -> assignment.getSubject().getId())
+                .collect(Collectors.toSet());
+        Map<UUID, Long> documentCounts = getDocumentCountsBySubjectIds(subjectIds);
+
+        Map<UUID, List<SubjectSummaryResponse>> result = new HashMap<>();
+        for (UUID userId : userIds) {
+            result.put(userId, List.of());
+        }
+
+        for (UserSubject assignment : assignments) {
+            UUID userId = assignment.getUser().getId();
+            result.computeIfAbsent(userId, ignored -> new ArrayList<>())
+                    .add(toSummary(assignment.getSubject(), documentCounts));
+        }
+
+        result.replaceAll((userId, summaries) -> summaries.stream()
+                .sorted(Comparator.comparing(SubjectSummaryResponse::name, String.CASE_INSENSITIVE_ORDER))
+                .toList());
+
+        return result;
+    }
+
+    private void assignLecturerToSubject(User lecturer, UUID subjectId) {
+        unassignOtherLecturersFromSubject(subjectId, lecturer.getId());
+        Subject subject = findActiveSubject(subjectId);
+        ensureAssignment(lecturer, subject);
+    }
+
+    private void ensureAssignment(User user, Subject subject) {
+        if (userSubjectRepository.existsByUser_IdAndSubject_Id(user.getId(), subject.getId())) {
+            return;
+        }
+        userSubjectRepository.save(UserSubject.builder()
+                .user(user)
+                .subject(subject)
+                .build());
+    }
+
+    private void unassignOtherLecturersFromSubject(UUID subjectId, UUID keepUserId) {
+        List<UserSubject> others = userSubjectRepository.findOtherLecturerAssignments(subjectId, keepUserId);
+        userSubjectRepository.deleteAll(others);
+    }
+
+    private List<UUID> getAssignedSubjectIds(UUID userId) {
+        return userSubjectRepository.findAllByUser_IdOrderBySubject_NameAsc(userId).stream()
+                .map(assignment -> assignment.getSubject().getId())
+                .toList();
+    }
+
+    private List<SubjectSummaryResponse> toSummariesFromAssignments(List<UserSubject> assignments) {
+        if (assignments == null || assignments.isEmpty()) {
+            return List.of();
+        }
+        Map<UUID, Long> documentCounts = getDocumentCountsBySubjectIds(
+                assignments.stream().map(assignment -> assignment.getSubject().getId()).toList());
+        return assignments.stream()
+                .map(assignment -> toSummary(assignment.getSubject(), documentCounts))
+                .toList();
+    }
+
+    private void validateStudent(User user) {
+        if (user == null || user.getRole() == null) {
+            throw new BadRequestException("Student is required");
+        }
+        if (!RoleCodes.STUDENT.equals(user.getRole().getCode())) {
+            throw new BadRequestException("User is not a student");
+        }
+    }
+
+    private void validateLecturer(User user) {
+        if (user == null || user.getRole() == null) {
+            throw new BadRequestException("Lecturer is required");
+        }
+        if (!RoleCodes.LECTURER.equals(user.getRole().getCode())) {
+            throw new BadRequestException("User is not a lecturer");
         }
     }
 
     private void validateSubjectIds(List<UUID> subjectIds, boolean requireAtLeastOne) {
         if (subjectIds == null || subjectIds.isEmpty()) {
             if (requireAtLeastOne) {
-                throw new BadRequestException("At least one subject must be enrolled");
+                throw new BadRequestException("At least one subject must be assigned");
             }
             return;
         }

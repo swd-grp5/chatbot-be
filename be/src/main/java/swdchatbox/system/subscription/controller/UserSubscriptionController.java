@@ -9,9 +9,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
-import swdchatbox.system.subscription.dto.response.StudentSubscriptionResponse;
+import swdchatbox.system.subscription.dto.response.UserSubscriptionResponse;
 import swdchatbox.system.subscription.entity.SubscriptionPlan;
-import swdchatbox.system.subscription.service.StudentSubscriptionService;
+import swdchatbox.system.subscription.service.UserSubscriptionService;
 
 import java.util.List;
 import java.util.UUID;
@@ -20,47 +20,39 @@ import java.util.UUID;
 @RequestMapping("/subscriptions")
 @RequiredArgsConstructor
 @SecurityRequirement(name = "bearerAuth")
-public class StudentSubscriptionController {
+public class UserSubscriptionController {
 
-    private final StudentSubscriptionService subscriptionService;
+    private final UserSubscriptionService subscriptionService;
 
-    // ==========================================
-    // 🟢 ENDPOINTS DÀNH CHO STUDENT (NGƯỜI DÙNG)
-    // ==========================================
-
-    @Operation(summary = "Lấy thông tin gói cước hiện tại của tôi", description = "Lấy thông tin gói VIP đang kích hoạt của user. Nếu chưa mua gói hoặc hết hạn, hệ thống tự động trả về thông tin gói 'Free' cấu hình sẵn trong Database.")
+    @Operation(summary = "Lấy thông tin gói cước hiện tại của tôi")
     @GetMapping("/current")
     public ResponseEntity<SubscriptionPlan> getCurrentPlan(Authentication authentication) {
         return ResponseEntity.ok(subscriptionService.getCurrentUserPlan(authentication.getName()));
     }
 
-    @Operation(summary = "Đăng ký gói cước VIP hệ thống", description = "Học sinh thực hiện mua và kích hoạt một gói cước (Basic/Premium/VIP) thông qua planId. Hệ thống sẽ tự động tính toán thời gian hết hạn.")
+    @Operation(summary = "Đăng ký gói cước VIP hệ thống")
     @PostMapping("/subscribe/{planId}")
-    public ResponseEntity<StudentSubscriptionResponse> subscribe(
+    public ResponseEntity<UserSubscriptionResponse> subscribe(
             @Parameter(description = "ID của gói cước cần đăng ký") @PathVariable UUID planId,
             Authentication authentication
     ) {
         return ResponseEntity.ok(subscriptionService.subscribe(planId, authentication.getName()));
     }
 
-    @Operation(summary = "Hủy gói cước VIP hiện tại", description = "Học sinh chủ động hủy gói cước đang sử dụng. Trạng thái gói sẽ chuyển sang inactive (Hệ thống sẽ tự hạ cấp về gói Free mặc định ở các tính năng chat).")
+    @Operation(summary = "Hủy gói cước VIP hiện tại")
     @PostMapping("/unsubscribe")
     public ResponseEntity<Void> unsubscribe(Authentication authentication) {
         subscriptionService.unsubscribe(authentication.getName());
         return ResponseEntity.noContent().build();
     }
 
-    @Operation(summary = "Xem lịch sử mua gói cước của tôi", description = "Hiển thị danh sách tất cả các gói cước học sinh này từng mua trong quá khứ, sắp xếp theo thời gian đăng ký mới nhất.")
+    @Operation(summary = "Xem lịch sử mua gói cước của tôi")
     @GetMapping("/my-history")
-    public ResponseEntity<List<StudentSubscriptionResponse>> getMyHistory(Authentication authentication) {
+    public ResponseEntity<List<UserSubscriptionResponse>> getMyHistory(Authentication authentication) {
         return ResponseEntity.ok(subscriptionService.findMySubscriptionHistory(authentication.getName()));
     }
 
-    // ==========================================
-    // 👑 ENDPOINTS DÀNH CHO ADMIN QUẢN LÝ (CRUD + SORT)
-    // ==========================================
-
-    @Operation(summary = "[Admin] Lấy danh sách gói kèm Phân trang & Sắp xếp (Sort)", description = "Yêu cầu quyền ADMIN. Lấy danh sách toàn bộ gói cước, hỗ trợ phân trang và sắp xếp linh hoạt (Ví dụ: sắp xếp theo giá tăng/giảm dần, theo ngày tạo,...).")
+    @Operation(summary = "[Admin] Lấy danh sách gói kèm Phân trang & Sắp xếp (Sort)")
     @GetMapping("/admin/plans")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Page<SubscriptionPlan>> getAllPlansForAdmin(
@@ -73,14 +65,14 @@ public class StudentSubscriptionController {
         return ResponseEntity.ok(plans);
     }
 
-    @Operation(summary = "[Admin] Tạo mới một gói cước", description = "Yêu cầu quyền ADMIN. Thêm một tùy chọn gói cước mới vào hệ thống (ví dụ: Gói VIP Thử Nghiệm). Tên gói không được trùng lặp.")
+    @Operation(summary = "[Admin] Tạo mới một gói cước")
     @PostMapping("/admin/plans")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<SubscriptionPlan> createPlan(@RequestBody SubscriptionPlan plan) {
         return ResponseEntity.ok(subscriptionService.createPlan(plan));
     }
 
-    @Operation(summary = "[Admin] Cập nhật thông tin gói cước", description = "Yêu cầu quyền ADMIN. Chỉnh sửa các thông số của gói cước như giá tiền, giới hạn câu hỏi, thời hạn hoặc bật/tắt trạng thái kinh doanh của gói.")
+    @Operation(summary = "[Admin] Cập nhật thông tin gói cước")
     @PutMapping("/admin/plans/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<SubscriptionPlan> updatePlan(
@@ -90,7 +82,7 @@ public class StudentSubscriptionController {
         return ResponseEntity.ok(subscriptionService.updatePlan(id, plan));
     }
 
-    @Operation(summary = "[Admin] Xóa một gói cước", description = "Yêu cầu quyền ADMIN. Xóa hoàn toàn cấu hình gói cước ra khỏi bảng `subscription_plans` theo ID.")
+    @Operation(summary = "[Admin] Xóa một gói cước")
     @DeleteMapping("/admin/plans/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Void> deletePlan(

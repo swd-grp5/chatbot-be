@@ -7,6 +7,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import swdchatbox.system.common.exception.BadRequestException;
 import swdchatbox.system.common.exception.ResourceNotFoundException;
+import swdchatbox.system.invoice.entity.Invoice;
+import swdchatbox.system.invoice.service.InvoiceService;
 import swdchatbox.system.payment.config.VnpayProperties;
 import swdchatbox.system.payment.dto.response.IpnResponse;
 import swdchatbox.system.payment.dto.response.IpnResponse.IpnResponseCode;
@@ -20,6 +22,9 @@ import swdchatbox.system.payment.entity.PaymentTransaction.TransactionType;
 import swdchatbox.system.payment.enums.PaymentStatus;
 import swdchatbox.system.payment.repository.PaymentTransactionRepository;
 import swdchatbox.system.payment.util.VnpayUtil;
+import swdchatbox.system.user.entity.User;
+import swdchatbox.system.user.repository.UserRepository;
+import swdchatbox.system.wallet.entity.Wallet;
 import swdchatbox.system.wallet.service.WalletService;
 
 import java.math.BigDecimal;
@@ -40,7 +45,9 @@ public class VnpayPaymentService {
     private static final BigDecimal AMOUNT_MULTIPLIER = BigDecimal.valueOf(100);
 
     private final PaymentTransactionRepository paymentTransactionRepository;
+    private final UserRepository userRepository;
     private final WalletService walletService;
+    private final InvoiceService invoiceService;
     private final VnpayProperties vnpay;
 
     /* ===================== Tạo giao dịch nạp ví ===================== */
@@ -54,6 +61,9 @@ public class VnpayPaymentService {
             throw new BadRequestException("Amount must be greater than 0");
         }
 
+        userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+
         LocalDateTime now = LocalDateTime.now(VN_ZONE);
         String createDate = now.format(VNP_DATE_FORMAT);
         String expireDate = now.plusMinutes(vnpay.getExpireMinutes()).format(VNP_DATE_FORMAT);
@@ -61,9 +71,12 @@ public class VnpayPaymentService {
         String clientIp = VnpayUtil.resolveIpAddress(request);
         String orderInfo = "Nap vi SWDChatBox - " + email;
 
+        Wallet wallet = walletService.getOrCreateWallet(email);
+        Invoice invoice = invoiceService.createWalletTopUpInvoice(wallet, amount);
+
         PaymentTransaction tx = paymentTransactionRepository.save(PaymentTransaction.builder()
                 .vnpTxnRef(txnRef)
-                .userEmail(email)
+                .invoice(invoice)
                 .amount(amount)
                 .paymentStatus(PaymentStatus.PENDING)
                 .paymentMethod(PaymentMethod.WALLET_TOPUP)
@@ -73,7 +86,6 @@ public class VnpayPaymentService {
                 .orderInfo(orderInfo)
                 .clientIp(clientIp)
                 .description("Student wallet top up")
-                .referenceType("WALLET")
                 .build());
 
         String paymentUrl = buildPaymentUrl(tx, bankCode, createDate, expireDate);
@@ -169,9 +181,10 @@ public class VnpayPaymentService {
         if (paid) {
             tx.setPaymentStatus(PaymentStatus.SUCCESS);
             paymentTransactionRepository.save(tx);
-            walletService.creditWallet(tx.getUserEmail(), tx.getAmount(), tx.getVnpTxnRef(), tx.getDescription());
+            invoiceService.markPaid(tx.getInvoice());
+            walletService.creditWallet(tx.getInvoice().resolveOwner().getEmail(), tx.getAmount(), tx.getVnpTxnRef(), tx.getDescription());
             log.info("VNPAY IPN success: credited wallet {} amount={} txnRef={}",
-                    tx.getUserEmail(), tx.getAmount(), txnRef);
+                    tx.getInvoice().resolveOwner().getEmail(), tx.getAmount(), txnRef);
         } else {
             tx.setPaymentStatus(PaymentStatus.FAILED);
             paymentTransactionRepository.save(tx);
@@ -223,7 +236,9 @@ public class VnpayPaymentService {
 
     @Transactional(readOnly = true)
     public List<PaymentResponse> getMyPayments(String email) {
-        return paymentTransactionRepository.findAllByUserEmailOrderByCreatedAtDesc(email)
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        return paymentTransactionRepository.findAllByInvoiceOwnerUserId(user.getId())
                 .stream().map(this::toResponse).toList();
     }
 
@@ -231,7 +246,9 @@ public class VnpayPaymentService {
     public PaymentResponse getByTxnRef(String txnRef, String email) {
         PaymentTransaction tx = paymentTransactionRepository.findByVnpTxnRef(txnRef)
                 .orElseThrow(() -> new ResourceNotFoundException("Payment transaction not found"));
-        if (!tx.getUserEmail().equals(email)) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        if (!tx.getInvoice().resolveOwner().getId().equals(user.getId())) {
             throw new BadRequestException("You can only view your own payments");
         }
         return toResponse(tx);
@@ -263,7 +280,8 @@ public class VnpayPaymentService {
         return PaymentResponse.builder()
                 .id(tx.getId())
                 .txnRef(tx.getVnpTxnRef())
-                .userEmail(tx.getUserEmail())
+                .userEmail(tx.getInvoice().resolveOwner().getEmail())
+                .invoiceId(tx.getInvoice().getId())
                 .amount(tx.getAmount())
                 .status(tx.getPaymentStatus())
                 .method(tx.getPaymentMethod() != null ? tx.getPaymentMethod().name() : null)
@@ -272,8 +290,6 @@ public class VnpayPaymentService {
                 .gateway(tx.getGateway())
                 .orderInfo(tx.getOrderInfo())
                 .description(tx.getDescription())
-                .referenceType(tx.getReferenceType())
-                .referenceId(tx.getReferenceId())
                 .vnpTransactionNo(tx.getVnpTransactionNo())
                 .vnpResponseCode(tx.getVnpResponseCode())
                 .vnpBankCode(tx.getVnpBankCode())

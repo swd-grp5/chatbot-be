@@ -2,8 +2,8 @@ package swdchatbox.system.payment.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import swdchatbox.system.invoice.entity.Invoice;
 import swdchatbox.system.payment.enums.PaymentStatus;
-
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -12,7 +12,7 @@ import java.util.UUID;
 @Table(name = "payments", indexes = {
         @Index(name = "idx_payment_ref", columnList = "vnp_txn_ref"),
         @Index(name = "idx_payment_status", columnList = "payment_status"),
-        @Index(name = "idx_payment_user_email", columnList = "user_email")
+        @Index(name = "idx_payment_invoice_id", columnList = "invoice_id")
 })
 @Getter
 @Setter
@@ -27,8 +27,9 @@ public class PaymentTransaction {
     @Column(name = "vnp_txn_ref", nullable = false, unique = true, length = 100)
     private String vnpTxnRef;
 
-    @Column(name = "user_email", nullable = false, length = 100)
-    private String userEmail;
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "invoice_id", nullable = false)
+    private Invoice invoice;
 
     @Column(name = "amount", nullable = false, precision = 19, scale = 2)
     private BigDecimal amount;
@@ -78,12 +79,6 @@ public class PaymentTransaction {
 
     @Column(name = "description", length = 255)
     private String description;
-
-    @Column(name = "reference_type", length = 50)
-    private String referenceType;
-
-    @Column(name = "reference_id", length = 100)
-    private String referenceId;
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

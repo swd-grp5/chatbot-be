@@ -11,29 +11,36 @@ import java.util.UUID;
 
 @Entity
 @Table(
-        name = "lecturer_subjects",
-        uniqueConstraints = @UniqueConstraint(columnNames = {"lecturer_id", "subject_id"})
+        name = "user_subjects",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_user_subject",
+                columnNames = {"user_id", "subject_id"}
+        ),
+        indexes = {
+                @Index(name = "idx_user_subject_user", columnList = "user_id"),
+                @Index(name = "idx_user_subject_subject", columnList = "subject_id")
+        }
 )
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class LecturerSubject {
+public class UserSubject {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "lecturer_id", nullable = false)
-    private User lecturer;
+    @JoinColumn(name = "user_id", nullable = false)
+    private User user;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "subject_id", nullable = false)
     private Subject subject;
 
     @CreationTimestamp
-    @Column(updatable = false)
-    private LocalDateTime assignedAt;
+    @Column(name = "created_at", updatable = false)
+    private LocalDateTime createdAt;
 }

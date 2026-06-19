@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 import swdchatbox.system.common.dto.PageResponse;
 import swdchatbox.system.common.exception.BadRequestException;
 import swdchatbox.system.common.exception.ResourceNotFoundException;
+import swdchatbox.system.enrollment.service.SubjectEnrollmentService;
+import swdchatbox.system.role.RoleCodes;
 import swdchatbox.system.subject.dto.request.SubjectFilterRequest;
 import swdchatbox.system.subject.dto.request.SubjectRequest;
 import swdchatbox.system.subject.dto.response.SubjectResponse;
@@ -16,6 +18,8 @@ import swdchatbox.system.subject.entity.Subject;
 import swdchatbox.system.subject.mapper.SubjectMapper;
 import swdchatbox.system.subject.repository.SubjectRepository;
 import swdchatbox.system.subject.repository.SubjectSpecifications;
+import swdchatbox.system.user.entity.User;
+import swdchatbox.system.user.repository.UserRepository;
 
 import java.util.UUID;
 
@@ -24,6 +28,8 @@ import java.util.UUID;
 public class SubjectService {
 
     private final SubjectRepository subjectRepository;
+    private final UserRepository userRepository;
+    private final SubjectEnrollmentService subjectEnrollmentService;
 
     public PageResponse<SubjectResponse> findAll(SubjectFilterRequest filter, Pageable pageable) {
         Specification<Subject> spec = Specification
@@ -32,7 +38,7 @@ public class SubjectService {
 
         Page<Subject> page = subjectRepository.findAll(spec, pageable);
         return PageResponse.<SubjectResponse>builder()
-                .content(page.getContent().stream().map(SubjectMapper::toResponse).toList())
+                .content(page.getContent().stream().map(this::toResponse).toList())
                 .page(page.getNumber())
                 .pageSize(page.getSize())
                 .totalElements(page.getTotalElements())
@@ -44,7 +50,7 @@ public class SubjectService {
     }
 
     public SubjectResponse findById(UUID id) {
-        return SubjectMapper.toResponse(findSubject(id));
+        return toResponse(findSubject(id));
     }
 
     @Transactional
@@ -56,7 +62,11 @@ public class SubjectService {
                 .description(request.getDescription())
                 .active(request.getActive() == null ? true : request.getActive())
                 .build();
-        return SubjectMapper.toResponse(subjectRepository.save(subject));
+        subject = subjectRepository.save(subject);
+        if (request.getUserId() != null) {
+            applyUserAssignment(subject, request.getUserId());
+        }
+        return toResponse(subject);
     }
 
     @Transactional
@@ -69,7 +79,11 @@ public class SubjectService {
         if (request.getActive() != null) {
             subject.setActive(request.getActive());
         }
-        return SubjectMapper.toResponse(subjectRepository.save(subject));
+        if (request.getUserId() != null) {
+            applyUserAssignment(subject, request.getUserId());
+        }
+        subject = subjectRepository.save(subject);
+        return toResponse(subject);
     }
 
     @Transactional
@@ -82,7 +96,13 @@ public class SubjectService {
     public SubjectResponse toggleActive(UUID id) {
         Subject subject = findSubject(id);
         subject.setActive(subject.getActive() == null || !subject.getActive());
-        return SubjectMapper.toResponse(subjectRepository.save(subject));
+        subject = subjectRepository.save(subject);
+        return toResponse(subject);
+    }
+
+    private SubjectResponse toResponse(Subject subject) {
+        User assignedLecturer = subjectEnrollmentService.findAssignedLecturerForSubject(subject.getId()).orElse(null);
+        return SubjectMapper.toResponse(subject, assignedLecturer);
     }
 
     private Subject findSubject(UUID id) {
@@ -97,5 +117,14 @@ public class SubjectService {
         if (duplicate) {
             throw new BadRequestException("Subject code already exists");
         }
+    }
+
+    private void applyUserAssignment(Subject subject, UUID userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        if (!RoleCodes.LECTURER.equals(user.getRole().getCode())) {
+            throw new BadRequestException("Assigned user must be a lecturer");
+        }
+        subjectEnrollmentService.assignUserToSubject(subject, user);
     }
 }

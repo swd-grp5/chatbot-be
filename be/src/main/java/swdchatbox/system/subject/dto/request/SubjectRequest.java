@@ -4,6 +4,8 @@ import jakarta.validation.constraints.NotBlank;
 import lombok.Getter;
 import lombok.Setter;
 
+import java.util.UUID;
+
 @Getter
 @Setter
 public class SubjectRequest {
@@ -17,4 +19,6 @@ public class SubjectRequest {
     private String description;
 
     private Boolean active;
+
+    private UUID userId;
 }

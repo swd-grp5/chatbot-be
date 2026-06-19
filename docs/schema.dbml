@@ -1,0 +1,368 @@
+// SWD Chatbox - generated from JPA entities
+// Import: dbdiagram.io → File → Import from → DBML
+
+Project swd_chatbox {
+  database_type: 'MySQL'
+  Note: 'Hibernate UUID stored as BINARY(16)'
+}
+
+// ===================== AUTH & USERS =====================
+
+Table roles {
+  id uuid [pk]
+  code varchar(50) [not null, unique]
+  name varchar(100) [not null]
+  description text
+  active boolean [not null]
+  created_at datetime
+  updated_at datetime
+}
+
+Table users {
+  id uuid [pk]
+  full_name varchar(100) [not null]
+  email varchar(100) [not null, unique]
+  password varchar
+  role_id uuid [not null, ref: > roles.id]
+  is_active boolean [not null]
+  provider varchar(20) [not null, note: 'LOCAL, GOOGLE']
+  email_verified boolean [not null]
+  created_at datetime
+  updated_at datetime
+}
+
+Table email_verification_tokens {
+  id uuid [pk]
+  token varchar(128) [not null, unique]
+  user_id uuid [not null, ref: > users.id]
+  expires_at datetime [not null]
+  used_at datetime
+  created_at datetime [not null]
+}
+
+Table password_reset_tokens {
+  id uuid [pk]
+  token varchar(128) [not null, unique]
+  user_id uuid [not null, ref: > users.id]
+  expires_at datetime [not null]
+  used_at datetime
+  created_at datetime [not null]
+}
+
+// ===================== SUBSCRIPTION & BILLING =====================
+
+Table subscription_plans {
+  id uuid [pk]
+  name varchar(50) [not null, unique]
+  price decimal(38,2) [not null]
+  daily_question_limit int [not null]
+  duration_in_months int [not null]
+  description text
+  active boolean [not null]
+  created_at datetime
+  updated_at datetime
+}
+
+Table user_subscriptions {
+  id uuid [pk]
+  user_id uuid [not null, ref: > users.id]
+  subscription_plan_id uuid [not null, ref: > subscription_plans.id]
+  active boolean [not null]
+  subscribed_at datetime [not null]
+  expires_at datetime [not null]
+  unsubscribed_at datetime
+  created_at datetime
+  updated_at datetime
+}
+
+Table invoices {
+  id uuid [pk]
+  invoice_number varchar(50) [not null, unique]
+  user_subscription_id uuid [ref: > user_subscriptions.id, note: 'SUBSCRIPTION only']
+  wallet_id uuid [ref: > wallets.id, note: 'WALLET_TOPUP only']
+  type varchar(20) [not null, note: 'SUBSCRIPTION, WALLET_TOPUP']
+  amount decimal(19,2) [not null]
+  status varchar(20) [not null, note: 'PENDING, PAID, CANCELLED']
+  plan_name varchar(100) [not null, note: 'denormalized snapshot']
+  description varchar(255)
+  issued_at datetime [not null]
+  paid_at datetime
+  created_at datetime
+  updated_at datetime
+}
+
+Table payments {
+  id uuid [pk]
+  vnp_txn_ref varchar(100) [not null, unique]
+  invoice_id uuid [not null, ref: > invoices.id]
+  amount decimal(19,2) [not null]
+  payment_status varchar(20) [not null, note: 'PENDING, SUCCESS, FAILED, CANCELLED']
+  payment_method varchar(50) [not null, note: 'WALLET_TOPUP, SUBSCRIPTION, REFUND, PENALTY']
+  payment_channel varchar(50) [not null, note: 'VNPAY, WALLET, CASH, NONE']
+  transaction_type varchar(20) [not null, note: 'PAYMENT, REFUND']
+  gateway varchar(50)
+  vnp_transaction_no varchar(100)
+  vnp_response_code varchar(10)
+  vnp_transaction_status varchar(10)
+  vnp_bank_code varchar(20)
+  vnp_pay_date varchar(20)
+  checksum_ok boolean
+  order_info varchar(255)
+  client_ip varchar(50)
+  description varchar(255)
+  created_at datetime
+  updated_at datetime
+}
+
+// ===================== WALLET =====================
+
+Table wallets {
+  id uuid [pk]
+  user_id uuid [not null, unique, ref: - users.id]
+  balance decimal(19,2) [not null]
+  reserved_balance decimal(19,2) [not null]
+  active boolean [not null]
+  created_at datetime
+  updated_at datetime
+}
+
+Table wallet_transactions {
+  id uuid [pk]
+  wallet_id uuid [not null, ref: > wallets.id]
+  transaction_type varchar(50) [not null, note: 'TOP_UP, SUBSCRIPTION_PAYMENT, REFUND']
+  status varchar(20) [not null, note: 'PENDING, SUCCESS, FAILED']
+  amount decimal(19,2) [not null]
+  reference_id varchar(100) [not null]
+  description varchar(255)
+  created_at datetime
+}
+
+// ===================== ACADEMIC =====================
+
+Table subjects {
+  id uuid [pk]
+  code varchar(50) [not null, unique]
+  name varchar(255) [not null]
+  description text
+  active boolean [not null]
+  created_at datetime
+  updated_at datetime
+}
+
+Table user_subjects {
+  id uuid [pk]
+  user_id uuid [not null, ref: > users.id]
+  subject_id uuid [not null, ref: > subjects.id]
+  created_at datetime
+
+  indexes {
+    (user_id, subject_id) [unique, name: 'uk_user_subject']
+    (user_id) [name: 'idx_user_subject_user']
+    (subject_id) [name: 'idx_user_subject_subject']
+  }
+}
+
+// ===================== DOCUMENTS & RAG =====================
+
+Table documents {
+  id uuid [pk]
+  subject_id uuid [not null, ref: > subjects.id]
+  uploaded_by uuid [ref: > users.id]
+  title varchar(255) [not null]
+  description text
+  document_type varchar(30) [not null, note: 'PDF, DOCX, PPTX, TXT, OTHER']
+  status varchar(30) [not null, note: 'UPLOADED, PROCESSING, INDEXED, FAILED']
+  total_pages int
+  total_chunks int
+  extracted_text longtext
+  active boolean [not null]
+  created_at datetime
+  updated_at datetime
+}
+
+Table document_files {
+  id uuid [pk]
+  document_id uuid [not null, ref: > documents.id]
+  original_file_name varchar(255) [not null]
+  stored_file_name varchar(500) [not null]
+  file_path varchar(1000) [not null]
+  mime_type varchar(100)
+  file_size bigint
+  checksum varchar(128)
+  created_at datetime
+}
+
+Table document_chunks {
+  id uuid [pk]
+  document_id uuid [not null, ref: > documents.id]
+  chunk_index int [not null]
+  chunk_type varchar(30) [not null, note: 'TEXT, TABLE, IMAGE_CAPTION, SLIDE_NOTE']
+  content longtext [not null]
+  page_start int
+  page_end int
+  token_count int
+  start_char_index int
+  end_char_index int
+  metadata_json text
+  created_at datetime
+}
+
+Table document_index_jobs {
+  id uuid [pk]
+  document_id uuid [not null, unique, ref: - documents.id]
+  status varchar(30) [not null, note: 'PENDING, PROCESSING, COMPLETED, RETRY, FAILED']
+  retry_count int [not null]
+  max_retries int [not null]
+  next_run_at datetime
+  last_error varchar(1000)
+  created_at datetime
+  updated_at datetime
+}
+
+Table ingestion_jobs {
+  id uuid [pk]
+  document_id uuid [not null, unique, ref: - documents.id]
+  status varchar(50) [not null, note: 'PENDING, EXTRACTING_TEXT, CHUNKING, EMBEDDING, COMPLETED, FAILED']
+  total_chunks int
+  processed_chunks int
+  embedded_chunks int
+  started_at datetime
+  finished_at datetime
+  error_message text
+  created_at datetime
+  updated_at datetime
+}
+
+Table vector_collections {
+  id uuid [pk]
+  name varchar(150) [not null, unique]
+  provider varchar(50) [not null, note: 'QDRANT, PINECONE, PGVECTOR']
+  embedding_model varchar(100) [not null]
+  dimension int [not null]
+  active boolean [not null]
+  created_at datetime
+  updated_at datetime
+}
+
+Table embedding_records {
+  id uuid [pk]
+  chunk_id uuid [not null, unique, ref: - document_chunks.id]
+  collection_id uuid [not null, ref: > vector_collections.id]
+  vector_id varchar(255) [not null, unique]
+  embedding_model varchar(100) [not null]
+  dimension int [not null]
+  embedded boolean [not null]
+  created_at datetime
+}
+
+// ===================== CHAT =====================
+
+Table chat_conversations {
+  id uuid [pk]
+  user_id uuid [ref: > users.id]
+  subject_id uuid [ref: > subjects.id]
+  title varchar(255) [not null]
+  selected_document_ids_json text
+  total_messages int
+  active boolean [not null]
+  created_at datetime
+  updated_at datetime
+}
+
+Table chat_messages {
+  id uuid [pk]
+  conversation_id uuid [not null, ref: > chat_conversations.id]
+  role varchar(30) [not null, note: 'USER, ASSISTANT, SYSTEM']
+  content longtext [not null]
+  llm_model varchar(100)
+  prompt_used longtext
+  prompt_tokens int
+  completion_tokens int
+  total_tokens int
+  created_at datetime
+}
+
+Table message_citations {
+  id uuid [pk]
+  message_id uuid [not null, ref: > chat_messages.id]
+  chunk_id uuid [not null, ref: > document_chunks.id]
+  document_id uuid [not null, ref: > documents.id]
+  citation_index int
+  score double
+  page_start int
+  page_end int
+  quoted_text text
+  created_at datetime
+}
+
+// ===================== SETTINGS =====================
+
+Table app_settings {
+  id uuid [pk]
+  setting_key varchar(150) [not null, unique]
+  setting_value text [not null]
+  description text
+  active boolean [not null]
+  created_at datetime
+  updated_at datetime
+}
+
+Table model_settings {
+  id uuid [pk]
+  provider varchar(50) [not null, note: 'OPENAI, GEMINI, OLLAMA']
+  chat_model varchar(100) [not null]
+  embedding_model varchar(100) [not null]
+  temperature double
+  top_k int
+  max_tokens int
+  active boolean [not null]
+  created_at datetime
+  updated_at datetime
+}
+
+// ===================== TABLE GROUPS =====================
+
+TableGroup auth_users {
+  roles
+  users
+  email_verification_tokens
+  password_reset_tokens
+}
+
+TableGroup subscription_billing {
+  subscription_plans
+  user_subscriptions
+  invoices
+  payments
+}
+
+TableGroup wallet {
+  wallets
+  wallet_transactions
+}
+
+TableGroup academic {
+  subjects
+  user_subjects
+}
+
+TableGroup documents_rag {
+  documents
+  document_files
+  document_chunks
+  document_index_jobs
+  ingestion_jobs
+  vector_collections
+  embedding_records
+}
+
+TableGroup chat {
+  chat_conversations
+  chat_messages
+  message_citations
+}
+
+TableGroup settings {
+  app_settings
+  model_settings
+}

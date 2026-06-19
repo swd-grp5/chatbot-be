@@ -22,7 +22,7 @@ import swdchatbox.system.student.dto.request.StudentUpdateRequest;
 import swdchatbox.system.student.dto.response.StudentResponse;
 import swdchatbox.system.student.mapper.StudentMapper;
 import swdchatbox.system.subject.dto.response.SubjectSummaryResponse;
-import swdchatbox.system.subscription.repository.StudentSubscriptionRepository;
+import swdchatbox.system.subscription.repository.UserSubscriptionRepository;
 import swdchatbox.system.user.entity.User;
 import swdchatbox.system.user.enums.AuthProvider;
 import swdchatbox.system.user.repository.UserRepository;
@@ -39,7 +39,7 @@ public class StudentService {
     private final UserRepository userRepository;
     private final RoleService roleService;
     private final PasswordEncoder passwordEncoder;
-    private final StudentSubscriptionRepository studentSubscriptionRepository;
+    private final UserSubscriptionRepository userSubscriptionRepository;
     private final ChatConversationRepository chatConversationRepository;
     private final SubjectEnrollmentService subjectEnrollmentService;
 
@@ -158,7 +158,7 @@ public class StudentService {
     public void delete(UUID id) {
         User user = findStudent(id);
 
-        if (studentSubscriptionRepository.existsByStudent_Id(id)) {
+        if (userSubscriptionRepository.existsByUser_Id(id)) {
             throw new BadRequestException("Cannot delete student that has subscriptions");
         }
 

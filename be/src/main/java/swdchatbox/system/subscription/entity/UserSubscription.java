@@ -11,10 +11,10 @@ import java.util.UUID;
 
 @Entity
 @Table(
-        name = "student_subscriptions",
+        name = "user_subscriptions",
         indexes = {
-                @Index(name = "idx_student_subscription_student", columnList = "student_id"),
-                @Index(name = "idx_student_subscription_active", columnList = "active")
+                @Index(name = "idx_user_subscription_user", columnList = "user_id"),
+                @Index(name = "idx_user_subscription_active", columnList = "active")
         }
 )
 @Getter
@@ -22,18 +22,17 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class StudentSubscription {
+public class UserSubscription {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "student_id", nullable = false)
-    private User student;
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "user_id", nullable = false)
+    private User user;
 
-    // 🚀 ĐỔI TỪ SUBJECT SANG SUBSCRIPTION PLAN Ở ĐÂY
-    @ManyToOne(fetch = FetchType.LAZY)
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "subscription_plan_id", nullable = false)
     private SubscriptionPlan subscriptionPlan;
 
@@ -43,7 +42,6 @@ public class StudentSubscription {
     @Column(name = "subscribed_at", nullable = false)
     private LocalDateTime subscribedAt;
 
-    // 🚀 BỔ SUNG NGÀY HẾT HẠN ĐỂ SERVICE GỌI ĐƯỢC HÀM GETTER
     @Column(name = "expires_at", nullable = false)
     private LocalDateTime expiresAt;
 
