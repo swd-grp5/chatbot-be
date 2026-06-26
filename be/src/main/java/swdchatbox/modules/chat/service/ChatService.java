@@ -68,11 +68,11 @@ public class ChatService {
 
     @Transactional
     public ConversationResponse createConversation(CreateConversationRequest request, User user) {
-        if (request.getSubjectId() == null) {
-            throw new BadRequestException("Subject is required");
+        Subject subject = null;
+        if (request.getSubjectId() != null) {
+            subjectEnrollmentService.requireStudentCanAccessSubject(user, request.getSubjectId());
+            subject = subjectEnrollmentService.findActiveSubject(request.getSubjectId());
         }
-        subjectEnrollmentService.requireStudentCanAccessSubject(user, request.getSubjectId());
-        Subject subject = subjectEnrollmentService.findActiveSubject(request.getSubjectId());
 
         String documentIdsJson = null;
         if (request.getDocumentIds() != null && !request.getDocumentIds().isEmpty()) {
