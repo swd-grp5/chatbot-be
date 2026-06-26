@@ -3,8 +3,8 @@ package swdchatbox.security;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.userdetails.*;
 import org.springframework.stereotype.Service;
-import swdchatbox.system.user.entity.User;
-import swdchatbox.system.user.repository.UserRepository;
+import swdchatbox.modules.user.entity.User;
+import swdchatbox.modules.user.repository.UserRepository;
 
 @Service
 @RequiredArgsConstructor

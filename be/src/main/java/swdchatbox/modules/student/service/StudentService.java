@@ -1,0 +1,200 @@
+package swdchatbox.modules.student.service;
+
+import jakarta.transaction.Transactional;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import swdchatbox.modules.enrollment.repository.EnrollmentSpecifications;
+import swdchatbox.modules.enrollment.service.SubjectEnrollmentService;
+import swdchatbox.modules.chat.repository.ChatConversationRepository;
+import swdchatbox.shared.dto.PageResponse;
+import swdchatbox.shared.exception.BadRequestException;
+import swdchatbox.shared.exception.ResourceNotFoundException;
+import swdchatbox.modules.role.RoleCodes;
+import swdchatbox.modules.role.entity.Role;
+import swdchatbox.modules.role.service.RoleService;
+import swdchatbox.modules.student.dto.request.StudentFilterRequest;
+import swdchatbox.modules.student.dto.request.StudentRequest;
+import swdchatbox.modules.student.dto.request.StudentUpdateRequest;
+import swdchatbox.modules.student.dto.response.StudentResponse;
+import swdchatbox.modules.student.mapper.StudentMapper;
+import swdchatbox.modules.subject.dto.response.SubjectSummaryResponse;
+import swdchatbox.modules.subscription.repository.UserSubscriptionRepository;
+import swdchatbox.modules.user.entity.User;
+import swdchatbox.modules.user.enums.AuthProvider;
+import swdchatbox.modules.user.repository.UserRepository;
+import swdchatbox.modules.user.repository.UserSpecifications;
+
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+@Service
+@RequiredArgsConstructor
+public class StudentService {
+
+    private final UserRepository userRepository;
+    private final RoleService roleService;
+    private final PasswordEncoder passwordEncoder;
+    private final UserSubscriptionRepository userSubscriptionRepository;
+    private final ChatConversationRepository chatConversationRepository;
+    private final SubjectEnrollmentService subjectEnrollmentService;
+
+    public PageResponse<StudentResponse> findAll(StudentFilterRequest filter, Pageable pageable) {
+        Specification<User> spec = Specification
+                .where(UserSpecifications.hasRoleCode(RoleCodes.STUDENT))
+                .and(UserSpecifications.hasActive(filter != null ? filter.getActive() : null))
+                .and(UserSpecifications.keywordLike(filter != null ? filter.getKeyword() : null))
+                .and(EnrollmentSpecifications.studentEnrolledInSubject(filter != null ? filter.getSubjectId() : null))
+                .and(UserSpecifications.createdAfter(filter != null ? filter.getCreatedFrom() : null))
+                .and(UserSpecifications.createdBefore(filter != null ? filter.getCreatedTo() : null));
+
+        Page<User> page = userRepository.findAll(spec, pageable);
+        List<UUID> studentIds = page.getContent().stream().map(User::getId).toList();
+        Map<UUID, List<SubjectSummaryResponse>> subjectsByStudent =
+                subjectEnrollmentService.getStudentSubjectsByStudentIds(studentIds);
+
+        return PageResponse.<StudentResponse>builder()
+                .content(page.getContent().stream()
+                        .map(user -> StudentMapper.toResponse(
+                                user,
+                                subjectsByStudent.getOrDefault(user.getId(), List.of())
+                        ))
+                        .toList())
+                .page(page.getNumber())
+                .pageSize(page.getSize())
+                .totalElements(page.getTotalElements())
+                .totalPages(page.getTotalPages())
+                .first(page.isFirst())
+                .last(page.isLast())
+                .empty(page.isEmpty())
+                .build();
+    }
+
+    public StudentResponse findById(UUID id) {
+        User student = findStudent(id);
+        return StudentMapper.toResponse(student, subjectEnrollmentService.getStudentSubjects(id));
+    }
+
+    public List<SubjectSummaryResponse> findMySubjects(String email) {
+        User student = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        if (!RoleCodes.STUDENT.equals(student.getRole().getCode())) {
+            throw new BadRequestException("Only students can view assigned subjects");
+        }
+        return subjectEnrollmentService.getStudentSubjects(student.getId());
+    }
+
+    @Transactional
+    public StudentResponse create(StudentRequest request) {
+        validateUniqueEmail(request.getEmail(), null);
+
+        Role studentRole = roleService.findRoleByCode(RoleCodes.STUDENT);
+
+        User user = User.builder()
+                .fullName(request.getFullName().trim())
+                .email(request.getEmail().trim().toLowerCase())
+                .password(passwordEncoder.encode(request.getPassword()))
+                .role(studentRole)
+                .provider(AuthProvider.LOCAL)
+                .isActive(request.getActive() == null || request.getActive())
+                .emailVerified(request.getEmailVerified() != null ? request.getEmailVerified() : true)
+                .build();
+
+        user = userRepository.save(user);
+        subjectEnrollmentService.replaceStudentSubjects(user, request.getSubjectIds());
+        return StudentMapper.toResponse(user, subjectEnrollmentService.getStudentSubjects(user.getId()));
+    }
+
+    @Transactional
+    public StudentResponse update(UUID id, StudentUpdateRequest request) {
+        User user = findStudent(id);
+
+        if (request.getFullName() != null) {
+            if (request.getFullName().isBlank()) {
+                throw new BadRequestException("Full name cannot be blank");
+            }
+            user.setFullName(request.getFullName().trim());
+        }
+
+        if (request.getEmail() != null) {
+            if (request.getEmail().isBlank()) {
+                throw new BadRequestException("Email cannot be blank");
+            }
+            String newEmail = request.getEmail().trim().toLowerCase();
+            validateUniqueEmail(newEmail, id);
+            user.setEmail(newEmail);
+        }
+
+        if (request.getPassword() != null) {
+            if (request.getPassword().isBlank()) {
+                throw new BadRequestException("Password cannot be blank");
+            }
+            user.setPassword(passwordEncoder.encode(request.getPassword()));
+            user.setProvider(AuthProvider.LOCAL);
+        }
+
+        if (request.getActive() != null) {
+            user.setIsActive(request.getActive());
+        }
+
+        if (request.getEmailVerified() != null) {
+            user.setEmailVerified(request.getEmailVerified());
+        }
+
+        user = userRepository.save(user);
+
+        if (request.getSubjectIds() != null) {
+            subjectEnrollmentService.syncStudentSubjects(user, request.getSubjectIds());
+        }
+
+        return StudentMapper.toResponse(user, subjectEnrollmentService.getStudentSubjects(user.getId()));
+    }
+
+    @Transactional
+    public void delete(UUID id) {
+        User user = findStudent(id);
+
+        if (userSubscriptionRepository.existsByUser_Id(id)) {
+            throw new BadRequestException("Cannot delete student that has subscriptions");
+        }
+
+        if (chatConversationRepository.countByUser_Id(id) > 0) {
+            throw new BadRequestException("Cannot delete student that has chat conversations");
+        }
+
+        subjectEnrollmentService.deleteStudentSubjects(id);
+        userRepository.delete(user);
+    }
+
+    @Transactional
+    public StudentResponse toggleActive(UUID id) {
+        User user = findStudent(id);
+        user.setIsActive(user.getIsActive() == null || !user.getIsActive());
+        user = userRepository.save(user);
+        return StudentMapper.toResponse(user, subjectEnrollmentService.getStudentSubjects(user.getId()));
+    }
+
+    private User findStudent(UUID id) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Student not found"));
+
+        if (!RoleCodes.STUDENT.equals(user.getRole().getCode())) {
+            throw new ResourceNotFoundException("Student not found");
+        }
+
+        return user;
+    }
+
+    private void validateUniqueEmail(String email, UUID excludeId) {
+        boolean duplicate = excludeId == null
+                ? userRepository.existsByEmail(email)
+                : userRepository.existsByEmailAndIdNot(email, excludeId);
+        if (duplicate) {
+            throw new BadRequestException("Email already exists");
+        }
+    }
+}
