@@ -102,17 +102,25 @@ public class SubjectEnrollmentService {
     }
 
     public void requireLecturerCanUpload(User user, UUID subjectId) {
+        requireLecturerCanManageSubject(user, subjectId, "upload documents");
+    }
+
+    public void requireLecturerCanManageQuiz(User user, UUID subjectId) {
+        requireLecturerCanManageSubject(user, subjectId, "manage quizzes");
+    }
+
+    private void requireLecturerCanManageSubject(User user, UUID subjectId, String action) {
         if (user == null) {
-            throw new BadRequestException("Authenticated user is required to upload documents");
+            throw new BadRequestException("Authenticated user is required to " + action);
         }
         if (RoleCodes.ADMIN.equals(user.getRole().getCode())) {
             return;
         }
         if (!RoleCodes.LECTURER.equals(user.getRole().getCode())) {
-            throw new BadRequestException("Only lecturers can upload documents");
+            throw new BadRequestException("Only lecturers can " + action);
         }
         if (!userSubjectRepository.existsByUser_IdAndSubject_Id(user.getId(), subjectId)) {
-            throw new BadRequestException("You are not assigned to upload documents for this subject");
+            throw new BadRequestException("You are not assigned to " + action + " for this subject");
         }
         findActiveSubject(subjectId);
     }
