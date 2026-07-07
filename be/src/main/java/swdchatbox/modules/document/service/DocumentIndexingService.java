@@ -1,9 +1,12 @@
 package swdchatbox.modules.document.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import swdchatbox.shared.exception.ResourceNotFoundException;
+import swdchatbox.modules.ai.service.EmbeddingService;
 import swdchatbox.modules.document.entity.Document;
 import swdchatbox.modules.document.entity.DocumentChunk;
 import swdchatbox.modules.document.entity.DocumentIndexJob;
@@ -15,6 +18,7 @@ import swdchatbox.modules.document.repository.DocumentRepository;
 import java.util.List;
 import java.util.UUID;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class DocumentIndexingService {
@@ -26,14 +30,15 @@ public class DocumentIndexingService {
     private final DocumentPageCountService documentPageCountService;
     private final DocumentIndexJobRepository documentIndexJobRepository;
     private final DocumentIndexJobService documentIndexJobService;
+    private final EmbeddingService embeddingService;
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public void processPendingJobs() {
         List<DocumentIndexJob> jobs = documentIndexJobRepository
                 .findTop50ByStatusInAndNextRunAtLessThanEqualOrderByNextRunAtAsc(
                         List.of(DocumentIndexJobStatus.PENDING, DocumentIndexJobStatus.RETRY),
-                        java.time.LocalDateTime.now()
-                );
+                        java.time.LocalDateTime.now());
 
         for (DocumentIndexJob job : jobs) {
             try {
@@ -51,12 +56,33 @@ public class DocumentIndexingService {
         Document document = documentRepository.findById(documentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Document not found"));
 
+        // 1. Extract text and chunk
         String extractedText = documentExtractionService.extract(document);
         List<DocumentChunk> chunks = documentChunkingService.chunk(document, extractedText);
 
+        // 2. Save chunks to MySQL (clear old ones first)
         documentChunkRepository.deleteAllByDocument_Id(documentId);
         if (!chunks.isEmpty()) {
             documentChunkRepository.saveAll(chunks);
+        }
+
+        // 3. Generate embeddings and store into DocumentChunk.embeddingJson
+        if (!chunks.isEmpty()) {
+            try {
+                List<String> texts = chunks.stream().map(DocumentChunk::getContent).toList();
+                List<List<Double>> embeddings = embeddingService.embedBatch(texts);
+
+                for (int i = 0; i < chunks.size(); i++) {
+                    if (i < embeddings.size()) {
+                        chunks.get(i).setEmbeddingJson(objectMapper.writeValueAsString(embeddings.get(i)));
+                    }
+                }
+                documentChunkRepository.saveAll(chunks);
+                log.info("Indexed {} chunks with embeddings for documentId={}", chunks.size(), documentId);
+            } catch (Exception e) {
+                log.error("Failed to generate embeddings for documentId={}", documentId, e);
+                throw new RuntimeException("Embedding generation failed during indexing", e);
+            }
         }
 
         document.setExtractedText(extractedText);

@@ -243,18 +243,13 @@ public class ChatService {
     }
 
     /**
-     * Build Qdrant filter based on conversation's subject and selected documents.
-     * Hỗ trợ nhiều document bằng cách dùng danh sách documentIds thay vì chỉ lấy
-     * doc đầu tiên.
+     * Build vector search filter based on conversation's selected documents.
+     * Supports: single documentId, multiple documentIds, or subjectId.
      */
     private Map<String, Object> buildSearchFilter(ChatConversation conversation) {
         Map<String, Object> filter = new LinkedHashMap<>();
 
-        if (conversation.getSubject() != null) {
-            filter.put("subjectId", conversation.getSubject().getId().toString());
-        }
-
-        // Nếu conversation có giới hạn tài liệu cụ thể, lọc theo tất cả các tài liệu đó
+        // Filter by selected documents (takes priority)
         if (conversation.getSelectedDocumentIdsJson() != null) {
             try {
                 List<String> docIds = objectMapper.readValue(
@@ -262,15 +257,16 @@ public class ChatService {
                         new TypeReference<List<String>>() {
                         });
                 if (docIds.size() == 1) {
-                    // Trường hợp 1 document: dùng filter đơn
                     filter.put("documentId", docIds.get(0));
                 } else if (docIds.size() > 1) {
-                    // Trường hợp nhiều document: dùng "should" (OR) clause cho Qdrant
                     filter.put("documentIds", docIds);
                 }
             } catch (Exception e) {
                 log.warn("Failed to parse selectedDocumentIdsJson", e);
             }
+        } else if (conversation.getSubject() != null) {
+            // Fall back to subject-level filter
+            filter.put("subjectId", conversation.getSubject().getId().toString());
         }
 
         return filter;

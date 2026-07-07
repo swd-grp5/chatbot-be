@@ -30,7 +30,6 @@ public class AiProperties {
     private Double retrievalScoreThreshold = 0.5;
     private Integer conversationHistoryLimit = 10;
 
-    private String qdrantHost = "localhost";
-    private Integer qdrantPort = 6333;
-    private String qdrantCollectionName = "swd_documents";
+    // Qdrant properties removed — vector storage now uses MySQL (in-memory cosine
+    // similarity)
 }

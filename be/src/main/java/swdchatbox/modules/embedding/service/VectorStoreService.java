@@ -1,240 +1,280 @@
 package swdchatbox.modules.embedding.service;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClient;
+import org.springframework.transaction.annotation.Transactional;
 import swdchatbox.modules.ai.config.AiProperties;
+import swdchatbox.modules.document.entity.DocumentChunk;
+import swdchatbox.modules.document.repository.DocumentChunkRepository;
 import swdchatbox.modules.embedding.dto.VectorSearchResult;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
- * Service for interacting with Qdrant vector database.
- * Handles collection creation, upserting vectors, and similarity search.
+ * VectorStoreService — MySQL-backed vector storage with in-memory cosine
+ * similarity search.
+ *
+ * Replaces the previous Qdrant implementation. Embeddings are stored as JSON
+ * arrays
+ * in the {@code DocumentChunk.embeddingJson} column. Similarity search loads
+ * candidate
+ * chunks from MySQL and ranks them in-memory using cosine similarity.
+ *
+ * This approach mirrors ChabotEduAI (C#/pgvector) but adapted for Java + MySQL.
  */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class VectorStoreService {
 
-    private final RestClient qdrantRestClient;
+    private final DocumentChunkRepository documentChunkRepository;
     private final AiProperties aiProperties;
     private final ObjectMapper objectMapper;
 
-    public VectorStoreService(
-            @Qualifier("qdrantRestClient") RestClient qdrantRestClient,
-            AiProperties aiProperties,
-            ObjectMapper objectMapper) {
-        this.qdrantRestClient = qdrantRestClient;
-        this.aiProperties = aiProperties;
-        this.objectMapper = objectMapper;
-    }
+    // ─────────────────────────── Write ───────────────────────────
 
     /**
-     * Ensure the Qdrant collection exists. Creates it if not present.
+     * Upsert a single vector: saves the embedding JSON into the DocumentChunk row.
+     * The {@code id} must be the chunk's UUID string.
      */
-    public void ensureCollection() {
-        String collection = aiProperties.getQdrantCollectionName();
-        try {
-            qdrantRestClient.get()
-                    .uri("/collections/{name}", collection)
-                    .retrieve()
-                    .body(String.class);
-            log.info("Qdrant collection '{}' already exists", collection);
-        } catch (Exception e) {
-            log.info("Creating Qdrant collection '{}'", collection);
-            createCollection(collection);
-        }
-    }
-
-    private void createCollection(String name) {
-        Map<String, Object> body = Map.of(
-                "vectors", Map.of(
-                        "size", aiProperties.getEmbeddingDimension(),
-                        "distance", "Cosine"));
-
-        try {
-            qdrantRestClient.put()
-                    .uri("/collections/{name}", name)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(body)
-                    .retrieve()
-                    .body(String.class);
-            log.info("Qdrant collection '{}' created with dimension {}", name, aiProperties.getEmbeddingDimension());
-        } catch (Exception e) {
-            log.error("Failed to create Qdrant collection '{}'", name, e);
-            throw new RuntimeException("Failed to create vector collection", e);
-        }
-    }
-
-    /**
-     * Upsert a single vector with metadata.
-     */
+    @Transactional
     public void upsert(String id, List<Double> vector, Map<String, Object> metadata) {
-        upsertBatch(List.of(new PointData(id, vector, metadata)));
+        saveEmbeddingToChunk(id, vector);
     }
 
     /**
      * Upsert a batch of vectors.
      */
+    @Transactional
     public void upsertBatch(List<PointData> points) {
-        String collection = aiProperties.getQdrantCollectionName();
+        for (PointData p : points) {
+            saveEmbeddingToChunk(p.id(), p.vector());
+        }
+    }
 
-        List<Map<String, Object>> qdrantPoints = points.stream()
-                .map(p -> {
-                    Map<String, Object> point = new LinkedHashMap<>();
-                    point.put("id", p.id());
-                    point.put("vector", p.vector());
-                    if (p.metadata() != null && !p.metadata().isEmpty()) {
-                        point.put("payload", p.metadata());
-                    }
-                    return point;
-                })
-                .toList();
-
-        Map<String, Object> body = Map.of("points", qdrantPoints);
-
+    private void saveEmbeddingToChunk(String chunkIdStr, List<Double> vector) {
         try {
-            qdrantRestClient.put()
-                    .uri("/collections/{name}/points", collection)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(body)
-                    .retrieve()
-                    .body(String.class);
-            log.debug("Upserted {} vectors to collection '{}'", points.size(), collection);
+            UUID chunkId = UUID.fromString(chunkIdStr);
+            Optional<DocumentChunk> opt = documentChunkRepository.findById(chunkId);
+            if (opt.isEmpty()) {
+                log.warn("saveEmbeddingToChunk: chunk not found id={}", chunkIdStr);
+                return;
+            }
+            DocumentChunk chunk = opt.get();
+            chunk.setEmbeddingJson(objectMapper.writeValueAsString(vector));
+            documentChunkRepository.save(chunk);
+            log.debug("Saved embedding for chunkId={} dim={}", chunkIdStr, vector.size());
         } catch (Exception e) {
-            log.error("Failed to upsert {} vectors", points.size(), e);
+            log.error("Failed to save embedding for chunkId={}", chunkIdStr, e);
             throw new RuntimeException("Vector upsert failed", e);
         }
     }
 
+    // ─────────────────────────── Read / Search ───────────────────────────
+
     /**
-     * Perform similarity search. Returns top-K results with score and metadata.
+     * Similarity search: loads candidate chunks from MySQL, computes cosine
+     * similarity
+     * in-memory, filters by score threshold, and returns top-K results.
+     *
+     * @param queryVector embedding of the user's question
+     * @param topK        maximum number of results to return
+     * @param filter      optional filter map; supports keys:
+     *                    {@code "documentId"} (single UUID string) or
+     *                    {@code "documentIds"} (List&lt;String&gt;)
      */
     public List<VectorSearchResult> search(List<Double> queryVector, int topK, Map<String, Object> filter) {
-        String collection = aiProperties.getQdrantCollectionName();
-
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("vector", queryVector);
-        body.put("limit", topK);
-        body.put("with_payload", true);
-        body.put("score_threshold", aiProperties.getRetrievalScoreThreshold());
-
-        if (filter != null && !filter.isEmpty()) {
-            // Qdrant filter format: {"must": [{"key": "field", "match": {"value": val}}]}
-            List<Map<String, Object>> mustClauses = new ArrayList<>();
-            for (Map.Entry<String, Object> entry : filter.entrySet()) {
-                mustClauses.add(Map.of(
-                        "key", entry.getKey(),
-                        "match", Map.of("value", entry.getValue())));
-            }
-            body.put("filter", Map.of("must", mustClauses));
-        }
-
         try {
-            String response = qdrantRestClient.post()
-                    .uri("/collections/{name}/points/search", collection)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(body)
-                    .retrieve()
-                    .body(String.class);
-
-            JsonNode root = objectMapper.readTree(response);
-            JsonNode results = root.path("result");
-
-            List<VectorSearchResult> searchResults = new ArrayList<>();
-            for (JsonNode hit : results) {
-                String id = hit.path("id").asText();
-                double score = hit.path("score").asDouble();
-
-                Map<String, Object> payload = new LinkedHashMap<>();
-                JsonNode payloadNode = hit.path("payload");
-                if (payloadNode.isObject()) {
-                    Iterator<Map.Entry<String, JsonNode>> fields = payloadNode.fields();
-                    while (fields.hasNext()) {
-                        Map.Entry<String, JsonNode> field = fields.next();
-                        JsonNode valueNode = field.getValue();
-                        if (valueNode.isTextual()) {
-                            payload.put(field.getKey(), valueNode.asText());
-                        } else if (valueNode.isInt()) {
-                            payload.put(field.getKey(), valueNode.asInt());
-                        } else if (valueNode.isDouble()) {
-                            payload.put(field.getKey(), valueNode.asDouble());
-                        } else {
-                            payload.put(field.getKey(), valueNode.toString());
-                        }
-                    }
-                }
-
-                searchResults.add(VectorSearchResult.builder()
-                        .id(id)
-                        .score(score)
-                        .metadata(payload)
-                        .build());
+            // 1. Load candidate chunks from MySQL
+            List<DocumentChunk> candidates = loadCandidates(filter);
+            if (candidates.isEmpty()) {
+                log.debug("Vector search: no indexed chunks found for filter={}", filter);
+                return List.of();
             }
 
-            return searchResults;
+            double threshold = aiProperties.getRetrievalScoreThreshold();
+            double[] qArr = toDoubleArray(queryVector);
+
+            // 2. Compute cosine similarity for each candidate in-memory
+            List<VectorSearchResult> results = new ArrayList<>();
+            for (DocumentChunk chunk : candidates) {
+                try {
+                    List<Double> embeddingVec = objectMapper.readValue(
+                            chunk.getEmbeddingJson(), new TypeReference<List<Double>>() {
+                            });
+                    double[] cArr = toDoubleArray(embeddingVec);
+                    double score = cosineSimilarity(qArr, cArr);
+
+                    if (score >= threshold) {
+                        results.add(VectorSearchResult.builder()
+                                .id(chunk.getId().toString())
+                                .score(score)
+                                .metadata(buildMetadata(chunk))
+                                .build());
+                    }
+                } catch (Exception e) {
+                    log.warn("Failed to parse embedding for chunkId={}", chunk.getId(), e);
+                }
+            }
+
+            // 3. Sort descending by score, take top-K
+            results.sort(Comparator.comparingDouble(VectorSearchResult::getScore).reversed());
+            List<VectorSearchResult> topResults = results.stream().limit(topK).collect(Collectors.toList());
+
+            log.debug("Vector search: candidates={} above-threshold={} topK={} returned={}",
+                    candidates.size(), results.size(), topK, topResults.size());
+            return topResults;
+
         } catch (Exception e) {
             log.error("Vector search failed", e);
             throw new RuntimeException("Vector search failed", e);
         }
     }
 
+    // ─────────────────────────── Delete ───────────────────────────
+
     /**
-     * Delete vectors by their IDs.
+     * Clear embeddings for a list of chunk IDs (sets embeddingJson = null).
+     * No external call needed — data lives in MySQL with the chunk.
      */
+    @Transactional
     public void deleteByIds(List<String> ids) {
-        if (ids == null || ids.isEmpty()) {
+        if (ids == null || ids.isEmpty())
             return;
-        }
-        String collection = aiProperties.getQdrantCollectionName();
-        Map<String, Object> body = Map.of("points", ids);
-
-        try {
-            qdrantRestClient.post()
-                    .uri("/collections/{name}/points/delete", collection)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(body)
-                    .retrieve()
-                    .body(String.class);
-            log.debug("Deleted {} vectors from collection '{}'", ids.size(), collection);
-        } catch (Exception e) {
-            log.error("Failed to delete vectors", e);
+        for (String idStr : ids) {
+            try {
+                UUID chunkId = UUID.fromString(idStr);
+                documentChunkRepository.findById(chunkId).ifPresent(chunk -> {
+                    chunk.setEmbeddingJson(null);
+                    documentChunkRepository.save(chunk);
+                });
+            } catch (IllegalArgumentException ignored) {
+                // not a valid UUID — skip
+            } catch (Exception e) {
+                log.warn("Failed to clear embedding for id={}", idStr, e);
+            }
         }
     }
 
     /**
-     * Delete all vectors whose payload matches the given document ID.
+     * Clear all embeddings associated with a document (by setting embeddingJson =
+     * null).
+     * The actual chunk rows will be removed by
+     * {@code DocumentChunkRepository.deleteAllByDocument_Id()}.
      */
+    @Transactional
     public void deleteByDocumentId(UUID documentId) {
-        if (documentId == null) {
-            return;
-        }
-        String collection = aiProperties.getQdrantCollectionName();
-        Map<String, Object> body = Map.of(
-                "filter", Map.of(
-                        "must", List.of(Map.of(
-                                "key", "documentId",
-                                "match", Map.of("value", documentId.toString())))));
-
-        try {
-            qdrantRestClient.post()
-                    .uri("/collections/{name}/points/delete", collection)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(body)
-                    .retrieve()
-                    .body(String.class);
-            log.info("Deleted vectors for documentId={} from collection '{}'", documentId, collection);
-        } catch (Exception e) {
-            log.error("Failed to delete vectors for documentId={}", documentId, e);
-        }
+        // Chunks themselves are deleted by deleteRelatedDatabaseRecords() in
+        // DocumentService.
+        // Nothing extra to do for embeddings since they live inside the chunk row.
+        log.debug("deleteByDocumentId: embeddings will be removed with chunks for documentId={}", documentId);
     }
 
     /**
-     * Record representing a point to upsert.
+     * No-op: collection management is not needed for MySQL storage.
+     */
+    public void ensureCollection() {
+        log.info("VectorStoreService (MySQL mode): ensureCollection() — no-op");
+    }
+
+    // ─────────────────────────── Private helpers ───────────────────────────
+
+    private List<DocumentChunk> loadCandidates(Map<String, Object> filter) {
+        if (filter == null || filter.isEmpty()) {
+            return documentChunkRepository.findAllWithEmbedding();
+        }
+
+        // Single document filter
+        if (filter.containsKey("documentId")) {
+            String docIdStr = filter.get("documentId").toString();
+            try {
+                UUID docId = UUID.fromString(docIdStr);
+                return documentChunkRepository.findAllWithEmbeddingByDocumentIds(List.of(docId));
+            } catch (IllegalArgumentException e) {
+                log.warn("Invalid documentId in filter: {}", docIdStr);
+                return List.of();
+            }
+        }
+
+        // Multiple documents filter
+        if (filter.containsKey("documentIds")) {
+            Object raw = filter.get("documentIds");
+            List<UUID> docIds = new ArrayList<>();
+            if (raw instanceof List<?> list) {
+                for (Object item : list) {
+                    try {
+                        docIds.add(UUID.fromString(item.toString()));
+                    } catch (IllegalArgumentException e) {
+                        log.warn("Invalid UUID in documentIds filter: {}", item);
+                    }
+                }
+            }
+            if (docIds.isEmpty())
+                return List.of();
+            return documentChunkRepository.findAllWithEmbeddingByDocumentIds(docIds);
+        }
+
+        // Subject filter
+        if (filter.containsKey("subjectId")) {
+            String subjectIdStr = filter.get("subjectId").toString();
+            try {
+                UUID subjectId = UUID.fromString(subjectIdStr);
+                return documentChunkRepository.findAllWithEmbeddingBySubjectId(subjectId);
+            } catch (IllegalArgumentException e) {
+                log.warn("Invalid subjectId in filter: {}", subjectIdStr);
+                return List.of();
+            }
+        }
+
+        // Unknown filter key — fall back to full scan
+        log.warn("Unknown filter keys {}, loading all embedded chunks", filter.keySet());
+        return documentChunkRepository.findAllWithEmbedding();
+    }
+
+    private Map<String, Object> buildMetadata(DocumentChunk chunk) {
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("chunkId", chunk.getId().toString());
+        if (chunk.getDocument() != null) {
+            meta.put("documentId", chunk.getDocument().getId().toString());
+            meta.put("documentTitle", chunk.getDocument().getTitle());
+        }
+        if (chunk.getPageStart() != null)
+            meta.put("pageStart", chunk.getPageStart());
+        if (chunk.getPageEnd() != null)
+            meta.put("pageEnd", chunk.getPageEnd());
+        return meta;
+    }
+
+    /**
+     * Cosine similarity = dot(a, b) / (|a| * |b|).
+     * Returns 0.0 if either vector is zero-length.
+     */
+    private static double cosineSimilarity(double[] a, double[] b) {
+        int len = Math.min(a.length, b.length);
+        double dot = 0, normA = 0, normB = 0;
+        for (int i = 0; i < len; i++) {
+            dot += a[i] * b[i];
+            normA += a[i] * a[i];
+            normB += b[i] * b[i];
+        }
+        if (normA == 0 || normB == 0)
+            return 0.0;
+        return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+    }
+
+    private static double[] toDoubleArray(List<Double> list) {
+        double[] arr = new double[list.size()];
+        for (int i = 0; i < list.size(); i++)
+            arr[i] = list.get(i);
+        return arr;
+    }
+
+    /**
+     * Record representing a point to upsert (kept for API compatibility).
      */
     public record PointData(String id, List<Double> vector, Map<String, Object> metadata) {
     }
