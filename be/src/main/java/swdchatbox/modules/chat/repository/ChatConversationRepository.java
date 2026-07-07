@@ -12,7 +12,8 @@ public interface ChatConversationRepository extends JpaRepository<ChatConversati
 
     Page<ChatConversation> findAllByUser_IdAndActiveTrueOrderByUpdatedAtDesc(UUID userId, Pageable pageable);
 
-    Optional<ChatConversation> findByIdAndUser_Id(UUID id, UUID userId);
+    // Chỉ tìm conversation còn active (chưa bị soft-delete)
+    Optional<ChatConversation> findByIdAndUser_IdAndActiveTrue(UUID id, UUID userId);
 
     long countByUser_Id(UUID userId);
 }

@@ -15,6 +15,7 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 import swdchatbox.modules.chat.dto.request.CreateConversationRequest;
 import swdchatbox.modules.chat.dto.request.SendMessageRequest;
+import swdchatbox.modules.chat.dto.request.UpdateConversationRequest;
 import swdchatbox.modules.chat.dto.response.ChatAnswerResponse;
 import swdchatbox.modules.chat.dto.response.ConversationResponse;
 import swdchatbox.modules.chat.dto.response.MessageResponse;
@@ -26,7 +27,7 @@ import swdchatbox.modules.user.repository.UserRepository;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/chat")
+@RequestMapping("/chat")  // Đã bỏ /api — prefix /api được cấu hình ở server.servlet.context-path nếu cần
 @RequiredArgsConstructor
 @SecurityRequirement(name = "bearerAuth")
 @Tag(name = "Chat", description = "Chat & Q&A with RAG pipeline")
@@ -64,6 +65,16 @@ public class ChatController {
             @AuthenticationPrincipal UserDetails userDetails) {
         User user = getCurrentUser(userDetails);
         return ResponseEntity.ok(chatService.getConversation(id, user.getId()));
+    }
+
+    @PatchMapping("/conversations/{id}")
+    @Operation(summary = "Update conversation title")
+    public ResponseEntity<ConversationResponse> updateConversation(
+            @PathVariable UUID id,
+            @Valid @RequestBody UpdateConversationRequest request,
+            @AuthenticationPrincipal UserDetails userDetails) {
+        User user = getCurrentUser(userDetails);
+        return ResponseEntity.ok(chatService.updateConversationTitle(id, user.getId(), request));
     }
 
     @DeleteMapping("/conversations/{id}")
