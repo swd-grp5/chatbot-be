@@ -14,7 +14,7 @@ public class QuizQuestionResponse {
     private QuestionTypeResponse questionType;
     private MultipleChoiceMode multipleChoiceMode;
     private String questionText;
-    private Integer points;
+    private Double points;
     private Integer sortOrder;
     /** Chỉ trả về cho giảng viên (khi xem đầy đủ để đối chiếu nguồn). */
     private UUID sourceDocumentId;

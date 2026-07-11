@@ -30,7 +30,7 @@ public class QuizAnswer {
     private Boolean isCorrect;
 
     @Column(nullable = false)
-    private Integer scoreEarned;
+    private Double scoreEarned;
 
     @Column(columnDefinition = "TEXT")
     private String answerPayload;

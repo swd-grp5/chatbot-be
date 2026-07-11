@@ -11,7 +11,7 @@ import java.util.List;
 @Setter
 public class QuizSubmitRequest {
 
-    @NotEmpty
+    @NotEmpty(message = "answers are required")
     @Valid
     private List<QuizAnswerSubmitRequest> answers;
 }

@@ -17,7 +17,7 @@ public class QuizSummaryResponse {
     private String title;
     private QuizStatus status;
     private Integer timeLimitMinutes;
-    private Integer totalPoints;
+    private Double totalPoints;
     private Integer questionCount;
     private Boolean active;
     private Boolean aiGenerated;

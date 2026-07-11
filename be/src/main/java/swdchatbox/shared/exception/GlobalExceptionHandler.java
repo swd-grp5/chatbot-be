@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -44,6 +45,45 @@ public class GlobalExceptionHandler {
                 .message("Validation failed")
                 .path(request.getRequestURI())
                 .fieldErrors(fieldErrors)
+                .build();
+
+        return ResponseEntity.badRequest().body(body);
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiErrorResponse> handleUnreadable(
+            HttpMessageNotReadableException ex,
+            HttpServletRequest request
+    ) {
+        log.error(
+                "Unreadable request at path={} type={} message={}",
+                request.getRequestURI(),
+                ex.getClass().getName(),
+                ex.getMessage(),
+                ex
+        );
+
+        String message = "Invalid request body";
+        Throwable cause = ex.getMostSpecificCause();
+        if (cause != null && cause.getMessage() != null) {
+            String detail = cause.getMessage();
+            if (detail.contains("PointsDistributionMode")) {
+                message = "pointsDistribution must be EVEN or BY_DIFFICULTY";
+            } else if (detail.contains("MultipleChoiceMode")) {
+                message = "multipleChoiceMode must be SINGLE or MULTIPLE";
+            } else if (detail.contains("QuizStatus")) {
+                message = "status must be a valid QuizStatus value";
+            } else if (detail.contains("UUID")) {
+                message = "Invalid UUID format in request body";
+            }
+        }
+
+        ApiErrorResponse body = ApiErrorResponse.builder()
+                .timestamp(Instant.now())
+                .status(HttpStatus.BAD_REQUEST.value())
+                .error(HttpStatus.BAD_REQUEST.getReasonPhrase())
+                .message(message)
+                .path(request.getRequestURI())
                 .build();
 
         return ResponseEntity.badRequest().body(body);

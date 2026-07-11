@@ -5,8 +5,8 @@ import lombok.*;
 import swdchatbox.modules.document.entity.Document;
 import swdchatbox.modules.quiz.enums.MultipleChoiceMode;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.UUID;
 
 @Entity
@@ -38,7 +38,7 @@ public class QuizQuestion {
     private String questionText;
 
     @Column(nullable = false)
-    private Integer points;
+    private Double points;
 
     @Column(nullable = false)
     private Integer sortOrder;
@@ -52,13 +52,14 @@ public class QuizQuestion {
     @Column(columnDefinition = "TEXT")
     private String sourceExcerpt;
 
+    // Set (not List) avoids MultipleBagFetchException when fetching Quiz.questions + options together
     @OneToMany(mappedBy = "question", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("sortOrder ASC")
     @Builder.Default
-    private List<QuizOption> options = new ArrayList<>();
+    private Set<QuizOption> options = new LinkedHashSet<>();
 
     @OneToMany(mappedBy = "question", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("sortOrder ASC")
     @Builder.Default
-    private List<QuizMatchingPair> matchingPairs = new ArrayList<>();
+    private Set<QuizMatchingPair> matchingPairs = new LinkedHashSet<>();
 }

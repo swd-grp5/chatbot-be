@@ -53,7 +53,9 @@ public final class QuizMapper {
     }
 
     public static QuizAttemptResponse toAttemptResponse(QuizAttempt attempt) {
-        double pct = attempt.getMaxScore() == 0 ? 0.0 : (attempt.getTotalScore() * 100.0) / attempt.getMaxScore();
+        double max = attempt.getMaxScore() != null ? attempt.getMaxScore() : 0.0;
+        double total = attempt.getTotalScore() != null ? attempt.getTotalScore() : 0.0;
+        double pct = max == 0.0 ? 0.0 : (total * 100.0) / max;
         return QuizAttemptResponse.builder()
                 .id(attempt.getId())
                 .quizId(attempt.getQuiz().getId())
@@ -105,8 +107,10 @@ public final class QuizMapper {
                 .build();
     }
 
-    private static int sumPoints(Quiz quiz) {
-        if (quiz.getQuestions() == null) return 0;
-        return quiz.getQuestions().stream().mapToInt(QuizQuestion::getPoints).sum();
+    private static double sumPoints(Quiz quiz) {
+        if (quiz.getQuestions() == null) return 0.0;
+        return quiz.getQuestions().stream()
+                .mapToDouble(q -> q.getPoints() != null ? q.getPoints() : 0.0)
+                .sum();
     }
 }

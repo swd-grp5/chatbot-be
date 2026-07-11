@@ -12,6 +12,6 @@ public class QuizAnswerResultResponse {
     private QuestionTypeResponse questionType;
     private String questionText;
     private Boolean isCorrect;
-    private Integer scoreEarned;
-    private Integer maxScore;
+    private Double scoreEarned;
+    private Double maxScore;
 }

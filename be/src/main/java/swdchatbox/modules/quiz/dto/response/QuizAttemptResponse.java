@@ -13,8 +13,8 @@ public class QuizAttemptResponse {
     private UUID id;
     private UUID quizId;
     private String quizTitle;
-    private Integer totalScore;
-    private Integer maxScore;
+    private Double totalScore;
+    private Double maxScore;
     private Double percentage;
     private LocalDateTime submittedAt;
     private List<QuizAnswerResultResponse> answers;

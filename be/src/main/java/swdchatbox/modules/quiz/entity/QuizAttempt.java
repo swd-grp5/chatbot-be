@@ -32,10 +32,10 @@ public class QuizAttempt {
     private User student;
 
     @Column(nullable = false)
-    private Integer totalScore;
+    private Double totalScore;
 
     @Column(nullable = false)
-    private Integer maxScore;
+    private Double maxScore;
 
     @OneToMany(mappedBy = "attempt", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default

@@ -81,6 +81,16 @@ public class QuizService {
 
     @Transactional
     public QuizResponse saveQuiz(QuizCreateRequest request, String userEmail, boolean aiGenerated) {
+        if (request == null) {
+            throw new BadRequestException("Request body is required");
+        }
+        if (request.getSubjectId() == null) {
+            throw new BadRequestException("subjectId is required");
+        }
+        if (request.getTitle() == null || request.getTitle().isBlank()) {
+            throw new BadRequestException("title is required");
+        }
+
         User lecturer = resolveUser(userEmail);
         subjectEnrollmentService.requireLecturerCanManageQuiz(lecturer, request.getSubjectId());
         Subject subject = subjectEnrollmentService.findActiveSubject(request.getSubjectId());
@@ -98,12 +108,21 @@ public class QuizService {
                 .build();
 
         applyQuestions(quiz, request.getQuestions());
-        quiz = quizRepository.save(quiz);
-        return QuizMapper.toResponse(quiz, true);
+        quiz = quizRepository.saveAndFlush(quiz);
+        // Reload so @CreationTimestamp is populated in the response
+        Quiz saved = quizRepository.findWithDetailsById(quiz.getId()).orElse(quiz);
+        return QuizMapper.toResponse(saved, true);
     }
 
     @Transactional
     public QuizResponse update(UUID id, QuizUpdateRequest request, String userEmail) {
+        if (request == null) {
+            throw new BadRequestException("Request body is required");
+        }
+        if (request.getTitle() == null || request.getTitle().isBlank()) {
+            throw new BadRequestException("title is required");
+        }
+
         Quiz quiz = findQuiz(id);
         User lecturer = resolveUser(userEmail);
         subjectEnrollmentService.requireLecturerCanManageQuiz(lecturer, quiz.getSubject().getId());
@@ -187,8 +206,10 @@ public class QuizService {
             throw new BadRequestException("All questions must be answered");
         }
 
-        int totalScore = 0;
-        int maxScore = quiz.getQuestions().stream().mapToInt(QuizQuestion::getPoints).sum();
+        double totalScore = 0.0;
+        double maxScore = quiz.getQuestions().stream()
+                .mapToDouble(q -> q.getPoints() != null ? q.getPoints() : 0.0)
+                .sum();
         List<QuizAnswer> gradedAnswers = new ArrayList<>();
 
         for (QuizAnswerSubmitRequest answerRequest : request.getAnswers()) {
@@ -210,8 +231,8 @@ public class QuizService {
         QuizAttempt attempt = QuizAttempt.builder()
                 .quiz(quiz)
                 .student(student)
-                .totalScore(totalScore)
-                .maxScore(maxScore)
+                .totalScore(round2(totalScore))
+                .maxScore(round2(maxScore))
                 .build();
         for (QuizAnswer answer : gradedAnswers) {
             answer.setAttempt(attempt);
@@ -309,15 +330,15 @@ public class QuizService {
                     .sourceExcerpt(questionRequest.getSourceExcerpt())
                     .build();
 
-            List<QuizOption> options = questionRequest.getOptions().stream()
+            Set<QuizOption> options = questionRequest.getOptions().stream()
                     .map(optionRequest -> QuizOption.builder()
                             .question(question)
                             .optionText(optionRequest.getOptionText().trim())
                             .isCorrect(optionRequest.getIsCorrect())
                             .sortOrder(optionRequest.getSortOrder())
                             .build())
-                    .toList();
-            question.setOptions(new ArrayList<>(options));
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            question.setOptions(options);
             quiz.getQuestions().add(question);
         }
     }
@@ -327,48 +348,84 @@ public class QuizService {
             throw new BadRequestException("Quiz must have at least one question");
         }
 
-        for (QuizQuestionRequest question : questions) {
-            if (question.getQuestionTypeId() == null) {
-                throw new BadRequestException("Question type is required");
+        for (int i = 0; i < questions.size(); i++) {
+            QuizQuestionRequest question = questions.get(i);
+            if (question == null) {
+                throw new BadRequestException("Question at index " + i + " must not be null");
             }
-            if (question.getPoints() == null || question.getPoints() <= 0) {
-                throw new BadRequestException("Each question must have points greater than 0");
+            String prefix = "Question at index " + i + ": ";
+
+            if (question.getQuestionTypeId() == null) {
+                throw new BadRequestException(prefix + "questionTypeId is required");
+            }
+            if (question.getQuestionText() == null || question.getQuestionText().isBlank()) {
+                throw new BadRequestException(prefix + "questionText is required");
+            }
+            if (question.getPoints() == null) {
+                throw new BadRequestException(prefix + "points is required");
+            }
+            if (question.getPoints() < 0.1) {
+                throw new BadRequestException(prefix + "points must be at least 0.1");
+            }
+            if (question.getSortOrder() == null) {
+                throw new BadRequestException(prefix + "sortOrder is required");
+            }
+            if (question.getSortOrder() < 0) {
+                throw new BadRequestException(prefix + "sortOrder must be >= 0");
+            }
+            if (question.getMultipleChoiceMode() == null) {
+                throw new BadRequestException(prefix + "multipleChoiceMode is required");
             }
 
             QuestionType questionType = questionTypeService.findActiveQuestionType(question.getQuestionTypeId());
             if (!QuestionTypeCodes.MULTIPLE_CHOICE.equals(questionType.getCode())) {
-                throw new BadRequestException("Only multiple choice questions are supported");
+                throw new BadRequestException(prefix + "only multiple choice questions are supported");
             }
-            validateMultipleChoiceQuestion(question);
+            validateMultipleChoiceQuestion(question, prefix);
         }
     }
 
-    private void validateMultipleChoiceQuestion(QuizQuestionRequest question) {
-        if (question.getMultipleChoiceMode() == null) {
-            throw new BadRequestException("Multiple choice mode is required");
-        }
+    private void validateMultipleChoiceQuestion(QuizQuestionRequest question, String prefix) {
         List<QuizOptionRequest> options = question.getOptions();
         if (options == null || options.isEmpty()) {
-            throw new BadRequestException("Multiple choice questions must have options");
+            throw new BadRequestException(prefix + "options are required");
         }
 
-        long correctCount = options.stream().filter(option -> Boolean.TRUE.equals(option.getIsCorrect())).count();
+        long correctCount = 0;
+        for (int j = 0; j < options.size(); j++) {
+            QuizOptionRequest option = options.get(j);
+            if (option == null) {
+                throw new BadRequestException(prefix + "option at index " + j + " must not be null");
+            }
+            if (option.getOptionText() == null || option.getOptionText().isBlank()) {
+                throw new BadRequestException(prefix + "optionText is required for option at index " + j);
+            }
+            if (option.getIsCorrect() == null) {
+                throw new BadRequestException(prefix + "isCorrect is required for option at index " + j);
+            }
+            if (option.getSortOrder() == null) {
+                throw new BadRequestException(prefix + "sortOrder is required for option at index " + j);
+            }
+            if (Boolean.TRUE.equals(option.getIsCorrect())) {
+                correctCount++;
+            }
+        }
 
         switch (question.getMultipleChoiceMode()) {
             case SINGLE -> {
                 if (options.size() < 2) {
-                    throw new BadRequestException("Single choice questions must have at least 2 options");
+                    throw new BadRequestException(prefix + "single choice questions must have at least 2 options");
                 }
                 if (correctCount != 1) {
-                    throw new BadRequestException("Single choice questions must have exactly 1 correct answer");
+                    throw new BadRequestException(prefix + "single choice questions must have exactly 1 correct answer");
                 }
             }
             case MULTIPLE -> {
                 if (options.size() < 2) {
-                    throw new BadRequestException("Multiple select questions must have at least 2 options");
+                    throw new BadRequestException(prefix + "multiple select questions must have at least 2 options");
                 }
                 if (correctCount < 1) {
-                    throw new BadRequestException("Multiple select questions must have at least 1 correct answer");
+                    throw new BadRequestException(prefix + "multiple select questions must have at least 1 correct answer");
                 }
             }
         }
@@ -383,6 +440,11 @@ public class QuizService {
         if (selected == null || selected.isEmpty()) {
             throw new BadRequestException("Selected options are required for multiple choice question");
         }
+        for (int i = 0; i < selected.size(); i++) {
+            if (selected.get(i) == null) {
+                throw new BadRequestException("selectedOptionIds[" + i + "] must not be null");
+            }
+        }
 
         Set<UUID> selectedIds = new HashSet<>(selected);
         Set<UUID> correctIds = question.getOptions().stream()
@@ -391,8 +453,12 @@ public class QuizService {
                 .collect(Collectors.toSet());
 
         boolean isCorrect = selectedIds.equals(correctIds);
-        int scoreEarned = isCorrect ? question.getPoints() : 0;
+        double scoreEarned = isCorrect ? (question.getPoints() != null ? question.getPoints() : 0.0) : 0.0;
         return new GradingResult(isCorrect, scoreEarned, toJson(Map.of("selectedOptionIds", selected)));
+    }
+
+    private static double round2(double value) {
+        return Math.round(value * 100.0) / 100.0;
     }
 
     private String toJson(Object value) {
@@ -439,6 +505,6 @@ public class QuizService {
         }
     }
 
-    private record GradingResult(boolean isCorrect, int scoreEarned, String payload) {
+    private record GradingResult(boolean isCorrect, double scoreEarned, String payload) {
     }
 }

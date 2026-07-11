@@ -1,5 +1,6 @@
 package swdchatbox.modules.quiz.dto.request;
 
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import lombok.Getter;
 import lombok.Setter;
@@ -11,8 +12,9 @@ import java.util.UUID;
 @Setter
 public class QuizAnswerSubmitRequest {
 
-    @NotNull
+    @NotNull(message = "questionId is required")
     private UUID questionId;
 
+    @NotEmpty(message = "selectedOptionIds are required")
     private List<UUID> selectedOptionIds;
 }
