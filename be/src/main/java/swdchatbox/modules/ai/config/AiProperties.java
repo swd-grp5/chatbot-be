@@ -15,8 +15,8 @@ public class AiProperties {
     private String provider = "gemini"; // "gemini" or "openai"
 
     private String geminiApiKey;
-    private String geminiChatModel = "gemini-2.0-flash";
-    private String geminiEmbeddingModel = "text-embedding-004";
+    private String geminiChatModel = "gemini-3.5-flash";
+    private String geminiEmbeddingModel = "gemini-embedding-001";
 
     private String openaiApiKey;
     private String openaiChatModel = "gpt-4o-mini";
