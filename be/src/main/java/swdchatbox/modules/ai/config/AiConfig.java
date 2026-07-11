@@ -39,15 +39,6 @@ public class AiConfig {
                 .build();
     }
 
-    @Bean("qdrantRestClient")
-    public RestClient qdrantRestClient() {
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofSeconds(10));
-        factory.setReadTimeout(Duration.ofSeconds(30));
-
-        String baseUrl = "http://" + aiProperties.getQdrantHost() + ":" + aiProperties.getQdrantPort();
-        return RestClient.builder()
-                .baseUrl(baseUrl)
-                .build();
-    }
+    // qdrantRestClient bean removed — vector storage now uses MySQL
+    // (VectorStoreService)
 }

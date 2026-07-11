@@ -15,6 +15,7 @@ import swdchatbox.modules.ai.service.EmbeddingService;
 import swdchatbox.modules.ai.service.LlmService;
 import swdchatbox.modules.chat.dto.request.CreateConversationRequest;
 import swdchatbox.modules.chat.dto.request.SendMessageRequest;
+import swdchatbox.modules.chat.dto.request.UpdateConversationRequest;
 import swdchatbox.modules.chat.dto.response.*;
 import swdchatbox.modules.chat.entity.ChatConversation;
 import swdchatbox.modules.chat.entity.ChatMessage;
@@ -68,11 +69,11 @@ public class ChatService {
 
     @Transactional
     public ConversationResponse createConversation(CreateConversationRequest request, User user) {
-        if (request.getSubjectId() == null) {
-            throw new BadRequestException("Subject is required");
+        Subject subject = null;
+        if (request.getSubjectId() != null) {
+            subjectEnrollmentService.requireStudentCanAccessSubject(user, request.getSubjectId());
+            subject = subjectEnrollmentService.findActiveSubject(request.getSubjectId());
         }
-        subjectEnrollmentService.requireStudentCanAccessSubject(user, request.getSubjectId());
-        Subject subject = subjectEnrollmentService.findActiveSubject(request.getSubjectId());
 
         String documentIdsJson = null;
         if (request.getDocumentIds() != null && !request.getDocumentIds().isEmpty()) {
@@ -112,6 +113,15 @@ public class ChatService {
         ChatConversation conversation = findConversation(conversationId, userId);
         conversation.setActive(false);
         conversationRepository.save(conversation);
+    }
+
+    @Transactional
+    public ConversationResponse updateConversationTitle(UUID conversationId, UUID userId,
+            UpdateConversationRequest request) {
+        ChatConversation conversation = findConversation(conversationId, userId);
+        conversation.setTitle(request.getTitle());
+        conversation = conversationRepository.save(conversation);
+        return toConversationResponse(conversation);
     }
 
     // ───────────────── Message History ─────────────────
@@ -165,14 +175,18 @@ public class ChatService {
         // 4. Enrich search results with chunk data from DB
         List<PromptBuilder.RetrievedChunk> retrievedChunks = enrichSearchResults(searchResults);
 
-        // 5. Load conversation history
-        List<ChatMessage> history = messageRepository
-                .findTop20ByConversation_IdOrderByCreatedAtDesc(conversationId);
-        // Reverse to chronological order, exclude the just-saved user message
-        history = new ArrayList<>(history);
-        Collections.reverse(history);
-        if (!history.isEmpty() && history.get(history.size() - 1).getId().equals(userMessage.getId())) {
-            history.remove(history.size() - 1);
+        // 5. Load conversation history (lấy trực tiếp theo thứ tự tăng dần, bỏ message
+        // vừa lưu)
+        List<ChatMessage> allHistory = messageRepository
+                .findAllByConversation_IdOrderByCreatedAtAsc(conversationId);
+        // Loại bỏ user message vừa lưu (tin nhắn cuối cùng)
+        List<ChatMessage> history = allHistory.stream()
+                .filter(m -> !m.getId().equals(userMessage.getId()))
+                .toList();
+        // Giới hạn số tin nhắn lịch sử (conversationHistoryLimit * 2: user + assistant)
+        int historyLimit = aiProperties.getConversationHistoryLimit() * 2;
+        if (history.size() > historyLimit) {
+            history = history.subList(history.size() - historyLimit, history.size());
         }
 
         // 6. Build prompt
@@ -222,35 +236,37 @@ public class ChatService {
     // ───────────────── Private Helpers ─────────────────
 
     private ChatConversation findConversation(UUID conversationId, UUID userId) {
-        return conversationRepository.findByIdAndUser_Id(conversationId, userId)
-                .orElseThrow(() -> new ResourceNotFoundException("Conversation not found"));
+        // Dùng findByIdAndUser_IdAndActiveTrue để không cho phép truy cập conversation
+        // đã bị soft-delete
+        return conversationRepository.findByIdAndUser_IdAndActiveTrue(conversationId, userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Conversation not found or has been deleted"));
     }
 
     /**
-     * Build Qdrant filter based on conversation's subject and selected documents.
+     * Build vector search filter based on conversation's selected documents.
+     * Supports: single documentId, multiple documentIds, or subjectId.
      */
     private Map<String, Object> buildSearchFilter(ChatConversation conversation) {
         Map<String, Object> filter = new LinkedHashMap<>();
 
-        if (conversation.getSubject() != null) {
-            filter.put("subjectId", conversation.getSubject().getId().toString());
-        }
-
-        // If specific documents are selected, filter by them
+        // Filter by selected documents (takes priority)
         if (conversation.getSelectedDocumentIdsJson() != null) {
             try {
                 List<String> docIds = objectMapper.readValue(
                         conversation.getSelectedDocumentIdsJson(),
                         new TypeReference<List<String>>() {
                         });
-                if (!docIds.isEmpty()) {
-                    // For single doc filter; for multiple, Qdrant needs "should" clause
-                    // Simplified: use first document or skip if multiple
+                if (docIds.size() == 1) {
                     filter.put("documentId", docIds.get(0));
+                } else if (docIds.size() > 1) {
+                    filter.put("documentIds", docIds);
                 }
             } catch (Exception e) {
                 log.warn("Failed to parse selectedDocumentIdsJson", e);
             }
+        } else if (conversation.getSubject() != null) {
+            // Fall back to subject-level filter
+            filter.put("subjectId", conversation.getSubject().getId().toString());
         }
 
         return filter;

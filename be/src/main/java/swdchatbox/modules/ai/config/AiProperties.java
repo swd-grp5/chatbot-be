@@ -15,8 +15,8 @@ public class AiProperties {
     private String provider = "gemini"; // "gemini" or "openai"
 
     private String geminiApiKey;
-    private String geminiChatModel = "gemini-2.0-flash";
-    private String geminiEmbeddingModel = "text-embedding-004";
+    private String geminiChatModel = "gemini-3.5-flash";
+    private String geminiEmbeddingModel = "gemini-embedding-001";
 
     private String openaiApiKey;
     private String openaiChatModel = "gpt-4o-mini";
@@ -30,7 +30,6 @@ public class AiProperties {
     private Double retrievalScoreThreshold = 0.5;
     private Integer conversationHistoryLimit = 10;
 
-    private String qdrantHost = "localhost";
-    private Integer qdrantPort = 6333;
-    private String qdrantCollectionName = "swd_documents";
+    // Qdrant properties removed — vector storage now uses MySQL (in-memory cosine
+    // similarity)
 }

@@ -56,7 +56,24 @@ public class LlmService {
 
     // ──────────────────────── Gemini ────────────────────────
 
+    private static long lastGeminiRequestTime = 0;
+    private static final long GEMINI_DELAY_MS = 3000; // 3 seconds delay
+
+    private synchronized void enforceGeminiRateLimit() {
+        long now = System.currentTimeMillis();
+        long diff = now - lastGeminiRequestTime;
+        if (diff < GEMINI_DELAY_MS) {
+            try {
+                Thread.sleep(GEMINI_DELAY_MS - diff);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        lastGeminiRequestTime = System.currentTimeMillis();
+    }
+
     private LlmResponse generateWithGemini(List<LlmMessage> messages, double temperature, int maxTokens) {
+        enforceGeminiRateLimit();
         String model = aiProperties.getGeminiChatModel();
         String url = "/v1beta/models/" + model + ":generateContent?key=" + aiProperties.getGeminiApiKey();
 
