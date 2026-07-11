@@ -24,31 +24,31 @@ public class DefaultMenuInitializer implements CommandLineRunner {
             return;
         }
 
-        // 1. Student — học tập
-        MenuGroup studentLearning = saveGroup("Học tập", "Chat và tài liệu của sinh viên", 1);
+        // 1. Student — learning
+        MenuGroup studentLearning = saveGroup("Learning", "Student chat and documents", 1);
         addItem(studentLearning, "Chat", "/", "MessageSquare", 1, RoleCodes.STUDENT);
-        addItem(studentLearning, "Tài liệu", "/documents", "FileText", 2, RoleCodes.STUDENT);
+        addItem(studentLearning, "Documents", "/documents", "FileText", 2, RoleCodes.STUDENT);
 
-        // 2. Student — tài chính
-        MenuGroup studentFinance = saveGroup("Tài chính", "Ví và gói đăng ký của sinh viên", 2);
-        addItem(studentFinance, "Ví", "/wallet", "Wallet", 1, RoleCodes.STUDENT);
-        addItem(studentFinance, "Gói tháng", "/subscriptions", "CreditCard", 2, RoleCodes.STUDENT);
+        // 2. Student — finance
+        MenuGroup studentFinance = saveGroup("Finance", "Student wallet and subscription plans", 2);
+        addItem(studentFinance, "Wallet", "/wallet", "Wallet", 1, RoleCodes.STUDENT);
+        addItem(studentFinance, "Subscriptions", "/subscriptions", "CreditCard", 2, RoleCodes.STUDENT);
 
         // 3. Lecturer
-        MenuGroup lecturer = saveGroup("Giảng dạy", "Chức năng dành cho giảng viên", 3);
-        addItem(lecturer, "Tài liệu", "/lecturer/documents", "FileText", 1, RoleCodes.LECTURER);
+        MenuGroup lecturer = saveGroup("Teaching", "Lecturer features", 3);
+        addItem(lecturer, "Documents", "/lecturer/documents", "FileText", 1, RoleCodes.LECTURER);
 
-        // 4. Admin — người dùng
-        MenuGroup adminUsers = saveGroup("Quản trị người dùng", "Quản lý sinh viên, giảng viên và vai trò", 4);
-        addItem(adminUsers, "Sinh viên", "/admin/users", "Users", 1, RoleCodes.ADMIN);
-        addItem(adminUsers, "Giảng viên", "/admin/lecturers", "GraduationCap", 2, RoleCodes.ADMIN);
-        addItem(adminUsers, "Vai trò", "/admin/roles", "ShieldCheck", 3, RoleCodes.ADMIN);
+        // 4. Admin — users
+        MenuGroup adminUsers = saveGroup("User Management", "Manage students, lecturers, and roles", 4);
+        addItem(adminUsers, "Students", "/admin/users", "Users", 1, RoleCodes.ADMIN);
+        addItem(adminUsers, "Lecturers", "/admin/lecturers", "GraduationCap", 2, RoleCodes.ADMIN);
+        addItem(adminUsers, "Roles", "/admin/roles", "ShieldCheck", 3, RoleCodes.ADMIN);
 
-        // 5. Admin — hệ thống
-        MenuGroup adminSystem = saveGroup("Hệ thống", "Môn học, gói tháng và cấu hình AI", 5);
-        addItem(adminSystem, "Môn học", "/admin/subjects", "BookOpen", 1, RoleCodes.ADMIN);
-        addItem(adminSystem, "Gói tháng", "/admin/subscriptions", "CreditCard", 2, RoleCodes.ADMIN);
-        addItem(adminSystem, "Cấu hình AI", "/admin/ai-config", "Bot", 3, RoleCodes.ADMIN);
+        // 5. Admin — system
+        MenuGroup adminSystem = saveGroup("System", "Subjects, subscriptions, and AI config", 5);
+        addItem(adminSystem, "Subjects", "/admin/subjects", "BookOpen", 1, RoleCodes.ADMIN);
+        addItem(adminSystem, "Subscriptions", "/admin/subscriptions", "CreditCard", 2, RoleCodes.ADMIN);
+        addItem(adminSystem, "AI Config", "/admin/ai-config", "Bot", 3, RoleCodes.ADMIN);
 
         menuGroupRepository.save(studentLearning);
         menuGroupRepository.save(studentFinance);
