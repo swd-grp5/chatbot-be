@@ -6,11 +6,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
-import swdchatbox.modules.ai.config.AiProperties;
 import swdchatbox.modules.ai.dto.LlmMessage;
 import swdchatbox.modules.ai.dto.LlmResponse;
 import swdchatbox.modules.ai.service.EmbeddingService;
 import swdchatbox.modules.ai.service.LlmService;
+import swdchatbox.modules.setting.service.ModelSettingService;
 import swdchatbox.modules.document.entity.Document;
 import swdchatbox.modules.document.entity.DocumentChunk;
 import swdchatbox.modules.document.enums.DocumentStatus;
@@ -52,7 +52,7 @@ public class QuizAiGenerationService {
     private final SubjectEnrollmentService subjectEnrollmentService;
     private final UserRepository userRepository;
     private final QuizService quizService;
-    private final AiProperties aiProperties;
+    private final ModelSettingService modelSettingService;
     private final ObjectMapper objectMapper;
 
     public QuizResponse generate(QuizGenerateRequest request, String userEmail) {
@@ -168,7 +168,7 @@ public class QuizAiGenerationService {
 
             List<VectorSearchResult> results = vectorStoreService.search(
                     vector,
-                    aiProperties.getRetrievalTopK() * 3,
+                    modelSettingService.resolveEffectiveConfig().getTopK() * 3,
                     filter);
 
             if (results.isEmpty()) {

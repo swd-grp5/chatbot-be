@@ -74,6 +74,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/sidebar", "/sidebar/**").authenticated()
                         .requestMatchers("/menu-groups", "/menu-groups/**").hasRole("ADMIN")
                         .requestMatchers("/menu-items", "/menu-items/**").hasRole("ADMIN")
+                        .requestMatchers("/model-settings", "/model-settings/**").hasRole("ADMIN")
                         .requestMatchers("/admin/**").hasRole("ADMIN")
                         .anyRequest().authenticated()
                 )

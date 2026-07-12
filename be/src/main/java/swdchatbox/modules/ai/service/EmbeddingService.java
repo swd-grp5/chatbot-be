@@ -2,13 +2,14 @@ package swdchatbox.modules.ai.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 import swdchatbox.modules.ai.config.AiProperties;
+import swdchatbox.modules.setting.dto.EffectiveAiConfig;
+import swdchatbox.modules.setting.service.ModelSettingService;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,47 +17,50 @@ import java.util.Map;
 
 /**
  * Service for generating text embeddings via Gemini or OpenAI API.
- * Used both for indexing document chunks and for embedding user queries.
+ * Provider/model are loaded from DB model_settings (admin-configurable).
  */
 @Slf4j
 @Service
 public class EmbeddingService {
 
     private final AiProperties aiProperties;
+    private final ModelSettingService modelSettingService;
     private final RestClient geminiRestClient;
     private final RestClient openaiRestClient;
     private final ObjectMapper objectMapper;
 
     public EmbeddingService(
             AiProperties aiProperties,
+            ModelSettingService modelSettingService,
             @Qualifier("geminiRestClient") RestClient geminiRestClient,
             @Qualifier("openaiRestClient") RestClient openaiRestClient,
             ObjectMapper objectMapper) {
         this.aiProperties = aiProperties;
+        this.modelSettingService = modelSettingService;
         this.geminiRestClient = geminiRestClient;
         this.openaiRestClient = openaiRestClient;
         this.objectMapper = objectMapper;
     }
 
-    // embed tài liệu
     public List<Double> embed(String text) {
-        if ("openai".equalsIgnoreCase(aiProperties.getProvider())) {
-            return embedWithOpenAI(text);
+        EffectiveAiConfig config = modelSettingService.resolveEffectiveConfig();
+        if (config.isOpenAi()) {
+            return embedWithOpenAI(text, config.getEmbeddingModel());
         }
-        return embedWithGemini(text);
+        return embedWithGemini(text, config.getEmbeddingModel());
     }
 
     public List<List<Double>> embedBatch(List<String> texts) {
-        if ("openai".equalsIgnoreCase(aiProperties.getProvider())) {
-            return embedBatchWithOpenAI(texts);
+        EffectiveAiConfig config = modelSettingService.resolveEffectiveConfig();
+        if (config.isOpenAi()) {
+            return embedBatchWithOpenAI(texts, config.getEmbeddingModel());
         }
-        return embedBatchWithGemini(texts);
+        return embedBatchWithGemini(texts, config.getEmbeddingModel());
     }
 
     // ──────────────────────── Gemini ────────────────────────
 
-    private List<Double> embedWithGemini(String text) {
-        String model = aiProperties.getGeminiEmbeddingModel();
+    private List<Double> embedWithGemini(String text, String model) {
         String url = "/v1beta/models/" + model + ":embedContent?key=" + aiProperties.getGeminiApiKey();
 
         Map<String, Object> body = Map.of(
@@ -84,8 +88,7 @@ public class EmbeddingService {
         }
     }
 
-    private List<List<Double>> embedBatchWithGemini(List<String> texts) {
-        String model = aiProperties.getGeminiEmbeddingModel();
+    private List<List<Double>> embedBatchWithGemini(List<String> texts, String model) {
         String url = "/v1beta/models/" + model + ":batchEmbedContents?key=" + aiProperties.getGeminiApiKey();
 
         List<Map<String, Object>> requests = texts.stream()
@@ -124,13 +127,13 @@ public class EmbeddingService {
 
     // ──────────────────────── OpenAI ────────────────────────
 
-    private List<Double> embedWithOpenAI(String text) {
-        return embedBatchWithOpenAI(List.of(text)).get(0);
+    private List<Double> embedWithOpenAI(String text, String model) {
+        return embedBatchWithOpenAI(List.of(text), model).get(0);
     }
 
-    private List<List<Double>> embedBatchWithOpenAI(List<String> texts) {
+    private List<List<Double>> embedBatchWithOpenAI(List<String> texts, String model) {
         Map<String, Object> body = Map.of(
-                "model", aiProperties.getOpenaiEmbeddingModel(),
+                "model", model,
                 "input", texts);
 
         try {

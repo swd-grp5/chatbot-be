@@ -10,28 +10,33 @@ import org.springframework.web.client.RestClient;
 import swdchatbox.modules.ai.config.AiProperties;
 import swdchatbox.modules.ai.dto.LlmMessage;
 import swdchatbox.modules.ai.dto.LlmResponse;
+import swdchatbox.modules.setting.dto.EffectiveAiConfig;
+import swdchatbox.modules.setting.service.ModelSettingService;
 
 import java.util.*;
 
 /**
  * Service for calling LLM chat completion APIs (Gemini or OpenAI).
- * Used in the RAG pipeline to generate answers from retrieved context.
+ * Provider/model are loaded from DB model_settings (admin-configurable).
  */
 @Slf4j
 @Service
 public class LlmService {
 
     private final AiProperties aiProperties;
+    private final ModelSettingService modelSettingService;
     private final RestClient geminiRestClient;
     private final RestClient openaiRestClient;
     private final ObjectMapper objectMapper;
 
     public LlmService(
             AiProperties aiProperties,
+            ModelSettingService modelSettingService,
             @Qualifier("geminiRestClient") RestClient geminiRestClient,
             @Qualifier("openaiRestClient") RestClient openaiRestClient,
             ObjectMapper objectMapper) {
         this.aiProperties = aiProperties;
+        this.modelSettingService = modelSettingService;
         this.geminiRestClient = geminiRestClient;
         this.openaiRestClient = openaiRestClient;
         this.objectMapper = objectMapper;
@@ -39,19 +44,36 @@ public class LlmService {
 
     /**
      * Generate a response from the LLM given a list of messages.
+     * Uses active model setting from DB.
      */
     public LlmResponse generate(List<LlmMessage> messages) {
-        return generate(messages, aiProperties.getTemperature(), aiProperties.getMaxTokens());
+        EffectiveAiConfig config = modelSettingService.resolveEffectiveConfig();
+        double temperature = config.getTemperature() != null
+                ? config.getTemperature()
+                : aiProperties.getTemperature();
+        int maxTokens = config.getMaxTokens() != null
+                ? config.getMaxTokens()
+                : aiProperties.getMaxTokens();
+        return generate(messages, temperature, maxTokens, config);
     }
 
     /**
      * Generate a response with custom temperature and max tokens.
      */
     public LlmResponse generate(List<LlmMessage> messages, double temperature, int maxTokens) {
-        if ("openai".equalsIgnoreCase(aiProperties.getProvider())) {
-            return generateWithOpenAI(messages, temperature, maxTokens);
+        EffectiveAiConfig config = modelSettingService.resolveEffectiveConfig();
+        return generate(messages, temperature, maxTokens, config);
+    }
+
+    private LlmResponse generate(
+            List<LlmMessage> messages,
+            double temperature,
+            int maxTokens,
+            EffectiveAiConfig config) {
+        if (config.isOpenAi()) {
+            return generateWithOpenAI(messages, temperature, maxTokens, config.getChatModel());
         }
-        return generateWithGemini(messages, temperature, maxTokens);
+        return generateWithGemini(messages, temperature, maxTokens, config.getChatModel());
     }
 
     // ──────────────────────── Gemini ────────────────────────
@@ -72,9 +94,12 @@ public class LlmService {
         lastGeminiRequestTime = System.currentTimeMillis();
     }
 
-    private LlmResponse generateWithGemini(List<LlmMessage> messages, double temperature, int maxTokens) {
+    private LlmResponse generateWithGemini(
+            List<LlmMessage> messages,
+            double temperature,
+            int maxTokens,
+            String model) {
         enforceGeminiRateLimit();
-        String model = aiProperties.getGeminiChatModel();
         String url = "/v1beta/models/" + model + ":generateContent?key=" + aiProperties.getGeminiApiKey();
 
         // Gemini uses "contents" array with role: "user" / "model"
@@ -137,9 +162,11 @@ public class LlmService {
 
     // ──────────────────────── OpenAI ────────────────────────
 
-    private LlmResponse generateWithOpenAI(List<LlmMessage> messages, double temperature, int maxTokens) {
-        String model = aiProperties.getOpenaiChatModel();
-
+    private LlmResponse generateWithOpenAI(
+            List<LlmMessage> messages,
+            double temperature,
+            int maxTokens,
+            String model) {
         List<Map<String, String>> openaiMessages = messages.stream()
                 .map(msg -> Map.of("role", msg.getRole(), "content", msg.getContent()))
                 .toList();

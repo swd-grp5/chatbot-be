@@ -13,6 +13,8 @@ import swdchatbox.modules.ai.dto.LlmMessage;
 import swdchatbox.modules.ai.dto.LlmResponse;
 import swdchatbox.modules.ai.service.EmbeddingService;
 import swdchatbox.modules.ai.service.LlmService;
+import swdchatbox.modules.setting.dto.EffectiveAiConfig;
+import swdchatbox.modules.setting.service.ModelSettingService;
 import swdchatbox.modules.chat.dto.request.CreateConversationRequest;
 import swdchatbox.modules.chat.dto.request.SendMessageRequest;
 import swdchatbox.modules.chat.dto.request.UpdateConversationRequest;
@@ -63,6 +65,7 @@ public class ChatService {
     private final LlmService llmService;
     private final PromptBuilder promptBuilder;
     private final AiProperties aiProperties;
+    private final ModelSettingService modelSettingService;
     private final ObjectMapper objectMapper;
 
     // ───────────────── Conversation CRUD ─────────────────
@@ -159,13 +162,15 @@ public class ChatService {
             return buildErrorResponse(conversation, "Không thể xử lý câu hỏi. Vui lòng thử lại.");
         }
 
+        EffectiveAiConfig aiConfig = modelSettingService.resolveEffectiveConfig();
+
         // 3. Vector search — find relevant document chunks
         Map<String, Object> filter = buildSearchFilter(conversation);
         List<VectorSearchResult> searchResults;
         try {
             searchResults = vectorStoreService.search(
                     queryVector,
-                    aiProperties.getRetrievalTopK(),
+                    aiConfig.getTopK(),
                     filter);
         } catch (Exception e) {
             log.error("Vector search failed", e);
