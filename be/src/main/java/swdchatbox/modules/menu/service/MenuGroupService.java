@@ -1,16 +1,16 @@
-package swdchatbox.system.menu.service;
+package swdchatbox.modules.menu.service;
 
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import swdchatbox.shared.exception.BadRequestException;
 import swdchatbox.shared.exception.ResourceNotFoundException;
-import swdchatbox.system.menu.dto.request.CreateMenuGroupRequest;
-import swdchatbox.system.menu.dto.request.UpdateMenuGroupRequest;
-import swdchatbox.system.menu.dto.response.MenuGroupResponse;
-import swdchatbox.system.menu.entity.MenuGroup;
-import swdchatbox.system.menu.mapper.MenuMapper;
-import swdchatbox.system.menu.repository.MenuGroupRepository;
+import swdchatbox.modules.menu.dto.request.CreateMenuGroupRequest;
+import swdchatbox.modules.menu.dto.request.UpdateMenuGroupRequest;
+import swdchatbox.modules.menu.dto.response.MenuGroupResponse;
+import swdchatbox.modules.menu.entity.MenuGroup;
+import swdchatbox.modules.menu.mapper.MenuMapper;
+import swdchatbox.modules.menu.repository.MenuGroupRepository;
 
 import java.util.List;
 import java.util.UUID;

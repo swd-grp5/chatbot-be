@@ -1,4 +1,4 @@
-package swdchatbox.system.menu.service;
+package swdchatbox.modules.menu.service;
 
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
@@ -6,13 +6,13 @@ import org.springframework.stereotype.Service;
 import swdchatbox.modules.role.RoleCodes;
 import swdchatbox.shared.exception.BadRequestException;
 import swdchatbox.shared.exception.ResourceNotFoundException;
-import swdchatbox.system.menu.dto.request.CreateMenuItemRequest;
-import swdchatbox.system.menu.dto.request.UpdateMenuItemRequest;
-import swdchatbox.system.menu.dto.response.MenuItemResponse;
-import swdchatbox.system.menu.entity.MenuGroup;
-import swdchatbox.system.menu.entity.MenuItem;
-import swdchatbox.system.menu.mapper.MenuMapper;
-import swdchatbox.system.menu.repository.MenuItemRepository;
+import swdchatbox.modules.menu.dto.request.CreateMenuItemRequest;
+import swdchatbox.modules.menu.dto.request.UpdateMenuItemRequest;
+import swdchatbox.modules.menu.dto.response.MenuItemResponse;
+import swdchatbox.modules.menu.entity.MenuGroup;
+import swdchatbox.modules.menu.entity.MenuItem;
+import swdchatbox.modules.menu.mapper.MenuMapper;
+import swdchatbox.modules.menu.repository.MenuItemRepository;
 
 import java.util.List;
 import java.util.Set;

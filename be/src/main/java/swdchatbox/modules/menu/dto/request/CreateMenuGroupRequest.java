@@ -1,13 +1,15 @@
-package swdchatbox.system.menu.dto.request;
+package swdchatbox.modules.menu.dto.request;
 
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.Setter;
 
 @Getter
 @Setter
-public class UpdateMenuGroupRequest {
+public class CreateMenuGroupRequest {
 
+    @NotBlank
     @Size(max = 100)
     private String name;
 

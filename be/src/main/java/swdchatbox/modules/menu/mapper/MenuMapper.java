@@ -1,9 +1,9 @@
-package swdchatbox.system.menu.mapper;
+package swdchatbox.modules.menu.mapper;
 
-import swdchatbox.system.menu.dto.response.MenuGroupResponse;
-import swdchatbox.system.menu.dto.response.MenuItemResponse;
-import swdchatbox.system.menu.entity.MenuGroup;
-import swdchatbox.system.menu.entity.MenuItem;
+import swdchatbox.modules.menu.dto.response.MenuGroupResponse;
+import swdchatbox.modules.menu.dto.response.MenuItemResponse;
+import swdchatbox.modules.menu.entity.MenuGroup;
+import swdchatbox.modules.menu.entity.MenuItem;
 
 import java.util.Collections;
 import java.util.Comparator;

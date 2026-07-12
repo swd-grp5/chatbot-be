@@ -1,4 +1,4 @@
-package swdchatbox.system.menu.initializer;
+package swdchatbox.modules.menu.initializer;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.CommandLineRunner;
@@ -6,9 +6,9 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import swdchatbox.modules.role.RoleCodes;
-import swdchatbox.system.menu.entity.MenuGroup;
-import swdchatbox.system.menu.entity.MenuItem;
-import swdchatbox.system.menu.repository.MenuGroupRepository;
+import swdchatbox.modules.menu.entity.MenuGroup;
+import swdchatbox.modules.menu.entity.MenuItem;
+import swdchatbox.modules.menu.repository.MenuGroupRepository;
 
 @Component
 @Order(20)
