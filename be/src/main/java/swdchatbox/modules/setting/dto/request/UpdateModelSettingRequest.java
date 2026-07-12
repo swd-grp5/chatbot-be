@@ -13,6 +13,8 @@ public class UpdateModelSettingRequest {
 
     private String embeddingModel;
 
+    private String apiKey;
+
     private Double temperature;
 
     private Integer topK;

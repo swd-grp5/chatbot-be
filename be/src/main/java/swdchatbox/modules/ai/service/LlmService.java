@@ -12,13 +12,10 @@ import swdchatbox.modules.ai.dto.LlmMessage;
 import swdchatbox.modules.ai.dto.LlmResponse;
 import swdchatbox.modules.setting.dto.EffectiveAiConfig;
 import swdchatbox.modules.setting.service.ModelSettingService;
+import swdchatbox.shared.exception.BadRequestException;
 
 import java.util.*;
 
-/**
- * Service for calling LLM chat completion APIs (Gemini or OpenAI).
- * Provider/model are loaded from DB model_settings (admin-configurable).
- */
 @Slf4j
 @Service
 public class LlmService {
@@ -42,10 +39,6 @@ public class LlmService {
         this.objectMapper = objectMapper;
     }
 
-    /**
-     * Generate a response from the LLM given a list of messages.
-     * Uses active model setting from DB.
-     */
     public LlmResponse generate(List<LlmMessage> messages) {
         EffectiveAiConfig config = modelSettingService.resolveEffectiveConfig();
         double temperature = config.getTemperature() != null
@@ -57,9 +50,6 @@ public class LlmService {
         return generate(messages, temperature, maxTokens, config);
     }
 
-    /**
-     * Generate a response with custom temperature and max tokens.
-     */
     public LlmResponse generate(List<LlmMessage> messages, double temperature, int maxTokens) {
         EffectiveAiConfig config = modelSettingService.resolveEffectiveConfig();
         return generate(messages, temperature, maxTokens, config);
@@ -70,16 +60,15 @@ public class LlmService {
             double temperature,
             int maxTokens,
             EffectiveAiConfig config) {
+        requireApiKey(config);
         if (config.isOpenAi()) {
-            return generateWithOpenAI(messages, temperature, maxTokens, config.getChatModel());
+            return generateWithOpenAI(messages, temperature, maxTokens, config.getChatModel(), config.getApiKey());
         }
-        return generateWithGemini(messages, temperature, maxTokens, config.getChatModel());
+        return generateWithGemini(messages, temperature, maxTokens, config.getChatModel(), config.getApiKey());
     }
 
-    // ──────────────────────── Gemini ────────────────────────
-
     private static long lastGeminiRequestTime = 0;
-    private static final long GEMINI_DELAY_MS = 3000; // 3 seconds delay
+    private static final long GEMINI_DELAY_MS = 3000;
 
     private synchronized void enforceGeminiRateLimit() {
         long now = System.currentTimeMillis();
@@ -98,18 +87,16 @@ public class LlmService {
             List<LlmMessage> messages,
             double temperature,
             int maxTokens,
-            String model) {
+            String model,
+            String apiKey) {
         enforceGeminiRateLimit();
-        String url = "/v1beta/models/" + model + ":generateContent?key=" + aiProperties.getGeminiApiKey();
+        String url = "/v1beta/models/" + model + ":generateContent?key=" + apiKey;
 
-        // Gemini uses "contents" array with role: "user" / "model"
-        // System instruction is separate
         List<Map<String, Object>> contents = new ArrayList<>();
         String systemInstruction = null;
 
         for (LlmMessage msg : messages) {
             if ("system".equals(msg.getRole())) {
-                // Gemini treats system instructions separately
                 systemInstruction = (systemInstruction == null ? "" : systemInstruction + "\n\n") + msg.getContent();
             } else {
                 String geminiRole = "assistant".equals(msg.getRole()) ? "model" : "user";
@@ -160,13 +147,12 @@ public class LlmService {
         }
     }
 
-    // ──────────────────────── OpenAI ────────────────────────
-
     private LlmResponse generateWithOpenAI(
             List<LlmMessage> messages,
             double temperature,
             int maxTokens,
-            String model) {
+            String model,
+            String apiKey) {
         List<Map<String, String>> openaiMessages = messages.stream()
                 .map(msg -> Map.of("role", msg.getRole(), "content", msg.getContent()))
                 .toList();
@@ -181,6 +167,7 @@ public class LlmService {
             String response = openaiRestClient.post()
                     .uri("/v1/chat/completions")
                     .contentType(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + apiKey)
                     .body(body)
                     .retrieve()
                     .body(String.class);
@@ -203,6 +190,13 @@ public class LlmService {
         } catch (Exception e) {
             log.error("OpenAI LLM call failed", e);
             throw new RuntimeException("LLM API call failed", e);
+        }
+    }
+
+    private static void requireApiKey(EffectiveAiConfig config) {
+        if (config.getApiKey() == null || config.getApiKey().isBlank()) {
+            throw new BadRequestException(
+                    "AI API key is not configured. Admin can set it via /model-settings or env (GEMINI_API_KEY / OPENAI_API_KEY).");
         }
     }
 }

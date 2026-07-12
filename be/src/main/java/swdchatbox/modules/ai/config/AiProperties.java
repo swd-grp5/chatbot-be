@@ -9,10 +9,9 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "app.ai")
 @Getter
 @Setter
-// đây là config cho AI để test model nào ngon
 public class AiProperties {
 
-    private String provider = "gemini"; // "gemini" or "openai"
+    private String provider = "gemini";
 
     private String geminiApiKey;
     private String geminiChatModel = "gemini-3.5-flash";
@@ -24,12 +23,9 @@ public class AiProperties {
 
     private Double temperature = 0.3;
     private Integer maxTokens = 2048;
-    private Integer embeddingDimension = 768; // Gemini default; OpenAI=1536
+    private Integer embeddingDimension = 768;
 
     private Integer retrievalTopK = 5;
     private Double retrievalScoreThreshold = 0.5;
     private Integer conversationHistoryLimit = 10;
-
-    // Qdrant properties removed — vector storage now uses MySQL (in-memory cosine
-    // similarity)
 }

@@ -11,6 +11,7 @@ import java.util.UUID;
 @Builder
 @JsonPropertyOrder({
         "id", "provider", "chatModel", "embeddingModel",
+        "hasApiKey", "apiKeyMasked",
         "temperature", "topK", "maxTokens", "active",
         "createdAt", "updatedAt"
 })
@@ -20,6 +21,8 @@ public class ModelSettingResponse {
     private String provider;
     private String chatModel;
     private String embeddingModel;
+    private boolean hasApiKey;
+    private String apiKeyMasked;
     private Double temperature;
     private Integer topK;
     private Integer maxTokens;

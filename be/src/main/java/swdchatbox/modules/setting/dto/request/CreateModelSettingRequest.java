@@ -17,12 +17,13 @@ public class CreateModelSettingRequest {
     @NotBlank
     private String embeddingModel;
 
+    private String apiKey;
+
     private Double temperature;
 
     private Integer topK;
 
     private Integer maxTokens;
 
-    /** When true (default), this setting becomes the active one used by AI. */
     private Boolean active;
 }
