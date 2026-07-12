@@ -1,9 +1,9 @@
-package swdchatbox.system.menu.repository;
+package swdchatbox.modules.menu.repository;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
-import swdchatbox.system.menu.entity.MenuGroup;
+import swdchatbox.modules.menu.entity.MenuGroup;
 
 import java.util.List;
 import java.util.Optional;

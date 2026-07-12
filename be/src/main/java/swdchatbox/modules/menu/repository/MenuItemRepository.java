@@ -1,7 +1,7 @@
-package swdchatbox.system.menu.repository;
+package swdchatbox.modules.menu.repository;
 
 import org.springframework.data.jpa.repository.JpaRepository;
-import swdchatbox.system.menu.entity.MenuItem;
+import swdchatbox.modules.menu.entity.MenuItem;
 
 import java.util.List;
 import java.util.UUID;

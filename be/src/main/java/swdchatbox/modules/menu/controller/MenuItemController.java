@@ -1,4 +1,4 @@
-package swdchatbox.system.menu.controller;
+package swdchatbox.modules.menu.controller;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -7,10 +7,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import swdchatbox.system.menu.dto.request.CreateMenuItemRequest;
-import swdchatbox.system.menu.dto.request.UpdateMenuItemRequest;
-import swdchatbox.system.menu.dto.response.MenuItemResponse;
-import swdchatbox.system.menu.service.MenuItemService;
+import swdchatbox.modules.menu.dto.request.CreateMenuItemRequest;
+import swdchatbox.modules.menu.dto.request.UpdateMenuItemRequest;
+import swdchatbox.modules.menu.dto.response.MenuItemResponse;
+import swdchatbox.modules.menu.service.MenuItemService;
 
 import java.util.List;
 import java.util.UUID;

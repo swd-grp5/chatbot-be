@@ -1,5 +1,7 @@
-package swdchatbox.system.menu.dto.request;
+package swdchatbox.modules.menu.dto.request;
 
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.Setter;
@@ -8,10 +10,12 @@ import java.util.UUID;
 
 @Getter
 @Setter
-public class UpdateMenuItemRequest {
+public class CreateMenuItemRequest {
 
+    @NotNull
     private UUID menuGroupId;
 
+    @NotBlank
     @Size(max = 100)
     private String title;
 

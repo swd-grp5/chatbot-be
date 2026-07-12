@@ -1,4 +1,4 @@
-package swdchatbox.system.menu.controller;
+package swdchatbox.modules.menu.controller;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -9,8 +9,8 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import swdchatbox.system.menu.dto.response.MenuGroupResponse;
-import swdchatbox.system.menu.service.MenuGroupService;
+import swdchatbox.modules.menu.dto.response.MenuGroupResponse;
+import swdchatbox.modules.menu.service.MenuGroupService;
 
 import java.util.List;
 

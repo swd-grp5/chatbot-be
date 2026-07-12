@@ -1,4 +1,4 @@
-package swdchatbox.system.menu.service;
+package swdchatbox.modules.menu.service;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -7,11 +7,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import swdchatbox.modules.role.RoleCodes;
 import swdchatbox.shared.exception.BadRequestException;
-import swdchatbox.system.menu.dto.request.CreateMenuGroupRequest;
-import swdchatbox.system.menu.dto.response.MenuGroupResponse;
-import swdchatbox.system.menu.entity.MenuGroup;
-import swdchatbox.system.menu.entity.MenuItem;
-import swdchatbox.system.menu.repository.MenuGroupRepository;
+import swdchatbox.modules.menu.dto.request.CreateMenuGroupRequest;
+import swdchatbox.modules.menu.dto.response.MenuGroupResponse;
+import swdchatbox.modules.menu.entity.MenuGroup;
+import swdchatbox.modules.menu.entity.MenuItem;
+import swdchatbox.modules.menu.repository.MenuGroupRepository;
 
 import java.util.List;
 import java.util.UUID;

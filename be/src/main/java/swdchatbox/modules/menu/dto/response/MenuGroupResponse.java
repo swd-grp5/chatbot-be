@@ -1,4 +1,4 @@
-package swdchatbox.system.menu.dto.response;
+package swdchatbox.modules.menu.dto.response;
 
 import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import lombok.Builder;

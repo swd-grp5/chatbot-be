@@ -1,4 +1,4 @@
-package swdchatbox.system.menu.entity;
+package swdchatbox.modules.menu.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
