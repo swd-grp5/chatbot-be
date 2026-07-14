@@ -170,11 +170,15 @@ public class ChatService {
                     e.getMessage(),
                     e);
             return buildErrorResponse(conversation, userMessage,
-                    "Không thể xử lý câu hỏi. Vui lòng thử lại.");
+                    "Không thể xử lý câu hỏi. Vui lòng thử lại.",
+                    aiConfig.getChatModel());
         }
 
-        // 3. Vector search — find relevant document chunks
-        Map<String, Object> filter = buildSearchFilter(conversation);
+        // 3. Vector search — find relevant document chunks (scoped to attached docs)
+        List<UUID> selectedDocIds = parseDocumentIds(conversation.getSelectedDocumentIdsJson());
+        Map<String, Object> filter = buildSearchFilter(conversation, selectedDocIds);
+        log.info("[chat] step=vector-search conversationId={} selectedDocIds={} filter={}",
+                conversationId, selectedDocIds, filter);
         List<VectorSearchResult> searchResults;
         try {
             searchResults = vectorStoreService.search(
@@ -210,12 +214,14 @@ public class ChatService {
             history = history.subList(history.size() - historyLimit, history.size());
         }
 
-        // 6. Build prompt
+        // 6. Build prompt (include attached doc titles so meta-questions stay accurate)
+        List<String> attachedTitles = resolveDocumentTitles(selectedDocIds);
         List<LlmMessage> llmMessages = promptBuilder.buildMessages(
                 retrievedChunks,
                 history,
                 userQuestion,
-                aiProperties.getConversationHistoryLimit());
+                aiProperties.getConversationHistoryLimit(),
+                attachedTitles);
 
         // 7. Call LLM
         LlmResponse llmResponse;
@@ -231,7 +237,8 @@ public class ChatService {
                     e.getMessage(),
                     e);
             return buildErrorResponse(conversation, userMessage,
-                    "Không thể tạo câu trả lời. Vui lòng thử lại.");
+                    "Không thể tạo câu trả lời. Vui lòng thử lại.",
+                    aiConfig.getChatModel());
         }
 
         // Consume credit since LLM generation succeeded!
@@ -277,32 +284,48 @@ public class ChatService {
 
     /**
      * Build vector search filter based on conversation's selected documents.
-     * Supports: single documentId, multiple documentIds, or subjectId.
+     * Priority: selected document IDs → subject → empty (no global scan).
      */
-    private Map<String, Object> buildSearchFilter(ChatConversation conversation) {
+    private Map<String, Object> buildSearchFilter(ChatConversation conversation, List<UUID> selectedDocIds) {
         Map<String, Object> filter = new LinkedHashMap<>();
 
-        // Filter by selected documents (takes priority)
-        if (conversation.getSelectedDocumentIdsJson() != null) {
-            try {
-                List<String> docIds = objectMapper.readValue(
-                        conversation.getSelectedDocumentIdsJson(),
-                        new TypeReference<List<String>>() {
-                        });
-                if (docIds.size() == 1) {
-                    filter.put("documentId", docIds.get(0));
-                } else if (docIds.size() > 1) {
-                    filter.put("documentIds", docIds);
-                }
-            } catch (Exception e) {
-                log.warn("Failed to parse selectedDocumentIdsJson", e);
+        if (selectedDocIds != null && !selectedDocIds.isEmpty()) {
+            if (selectedDocIds.size() == 1) {
+                filter.put("documentId", selectedDocIds.get(0).toString());
+            } else {
+                filter.put("documentIds", selectedDocIds.stream().map(UUID::toString).toList());
             }
-        } else if (conversation.getSubject() != null) {
-            // Fall back to subject-level filter
-            filter.put("subjectId", conversation.getSubject().getId().toString());
+            return filter;
         }
 
+        if (conversation.getSubject() != null) {
+            filter.put("subjectId", conversation.getSubject().getId().toString());
+            return filter;
+        }
+
+        // No docs attached and no subject: search nothing (never all documents).
+        filter.put("documentIds", List.of());
         return filter;
+    }
+
+    private List<String> resolveDocumentTitles(List<UUID> documentIds) {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return List.of();
+        }
+        List<Document> docs = documentRepository.findAllById(documentIds);
+        Map<UUID, String> titleById = new HashMap<>();
+        for (Document doc : docs) {
+            titleById.put(doc.getId(), doc.getTitle());
+        }
+        // Preserve conversation selection order
+        List<String> titles = new ArrayList<>();
+        for (UUID id : documentIds) {
+            String title = titleById.get(id);
+            if (title != null) {
+                titles.add(title);
+            }
+        }
+        return titles;
     }
 
     /**
@@ -426,11 +449,13 @@ public class ChatService {
     private ChatAnswerResponse buildErrorResponse(
             ChatConversation conversation,
             ChatMessage userMessage,
-            String errorMessage) {
+            String errorMessage,
+            String llmModel) {
         ChatMessage errorMsg = ChatMessage.builder()
                 .conversation(conversation)
                 .role(MessageRole.ASSISTANT)
                 .content(errorMessage)
+                .llmModel(llmModel)
                 .build();
         errorMsg = messageRepository.save(errorMsg);
 

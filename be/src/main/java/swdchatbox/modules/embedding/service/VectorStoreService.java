@@ -184,8 +184,10 @@ public class VectorStoreService {
     // ─────────────────────────── Private helpers ───────────────────────────
 
     private List<DocumentChunk> loadCandidates(Map<String, Object> filter) {
+        // Refuse unscoped search — otherwise chat can pull chunks from unrelated documents.
         if (filter == null || filter.isEmpty()) {
-            return documentChunkRepository.findAllWithEmbedding();
+            log.warn("Vector search called with empty filter — returning no results (refusing global scan)");
+            return List.of();
         }
 
         // Single document filter
@@ -230,9 +232,9 @@ public class VectorStoreService {
             }
         }
 
-        // Unknown filter key — fall back to full scan
-        log.warn("Unknown filter keys {}, loading all embedded chunks", filter.keySet());
-        return documentChunkRepository.findAllWithEmbedding();
+        // Unknown filter key — do not fall back to full scan
+        log.warn("Unknown filter keys {}, returning no results", filter.keySet());
+        return List.of();
     }
 
     private Map<String, Object> buildMetadata(DocumentChunk chunk) {
