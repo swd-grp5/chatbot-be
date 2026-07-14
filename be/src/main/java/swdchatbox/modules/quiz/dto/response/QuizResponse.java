@@ -25,8 +25,14 @@ public class QuizResponse {
     private Integer questionCount;
     private Boolean active;
     private Boolean aiGenerated;
+    private Boolean shuffleQuestions;
+    private Boolean shuffleOptions;
+    private Boolean showScore;
+    private Integer questionsPerVariant;
+    private Integer variantCount;
     private LocalDateTime publishedAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private List<QuizQuestionResponse> questions;
+    private List<QuizVariantSummaryResponse> variants;
 }

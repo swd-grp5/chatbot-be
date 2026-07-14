@@ -11,12 +11,14 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import swdchatbox.modules.quiz.dto.request.QuizAssembleRequest;
 import swdchatbox.modules.quiz.dto.request.QuizFilterRequest;
 import swdchatbox.modules.quiz.dto.request.QuizGenerateRequest;
 import swdchatbox.modules.quiz.dto.request.QuizSubmitRequest;
 import swdchatbox.modules.quiz.dto.request.QuizUpdateRequest;
 import swdchatbox.modules.quiz.dto.response.QuizAttemptResponse;
 import swdchatbox.modules.quiz.dto.response.QuizResponse;
+import swdchatbox.modules.quiz.dto.response.QuizStartResponse;
 import swdchatbox.modules.quiz.dto.response.QuizSummaryResponse;
 import swdchatbox.modules.quiz.enums.QuizStatus;
 import swdchatbox.modules.quiz.service.QuizAiGenerationService;
@@ -71,6 +73,26 @@ public class QuizController {
     @PostMapping("/generate")
     public ResponseEntity<QuizResponse> generate(@Valid @RequestBody QuizGenerateRequest request, Authentication authentication) {
         return ResponseEntity.ok(quizAiGenerationService.generate(request, email(authentication)));
+    }
+
+    @Operation(summary = "Tạo quiz từ ngân hàng câu hỏi",
+            description = "Chọn câu hỏi từ ngân hàng để lắp thành quiz. Hỗ trợ chia điểm đều/tự chia, ẩn-hiện điểm, "
+                    + "xáo trộn câu + đáp án, và chia N đề (vd: pool 100 câu, mỗi đề 50 câu, 3 đề).")
+    @PostMapping("/assemble")
+    public ResponseEntity<QuizResponse> assemble(@Valid @RequestBody QuizAssembleRequest request, Authentication authentication) {
+        return ResponseEntity.ok(quizService.assemble(request, email(authentication)));
+    }
+
+    @Operation(summary = "Sinh lại các đề (variant)", description = "Xáo trộn lại pool để tạo bộ đề mới. Chỉ khi quiz đang DRAFT.")
+    @PostMapping("/{id}/variants/regenerate")
+    public ResponseEntity<QuizResponse> regenerateVariants(@PathVariable UUID id, Authentication authentication) {
+        return ResponseEntity.ok(quizService.regenerateVariants(id, email(authentication)));
+    }
+
+    @Operation(summary = "Sinh viên bắt đầu làm bài", description = "Trả về một đề (random nếu có nhiều đề), câu + đáp án đã xáo trộn, ẩn đáp án đúng. Gửi kèm variantId khi nộp.")
+    @GetMapping("/{id}/start")
+    public ResponseEntity<QuizStartResponse> start(@PathVariable UUID id, Authentication authentication) {
+        return ResponseEntity.ok(quizService.startAttempt(id, email(authentication)));
     }
 
     @Operation(summary = "Giảng viên chỉnh sửa quiz", description = "Sửa câu hỏi, đáp án đúng sau khi AI sinh. Chỉ hỗ trợ trắc nghiệm SINGLE/MULTIPLE.")

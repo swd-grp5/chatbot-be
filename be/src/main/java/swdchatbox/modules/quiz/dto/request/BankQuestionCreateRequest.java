@@ -2,7 +2,6 @@ package swdchatbox.modules.quiz.dto.request;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
-import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
@@ -15,7 +14,10 @@ import java.util.UUID;
 
 @Getter
 @Setter
-public class QuizQuestionRequest {
+public class BankQuestionCreateRequest {
+
+    @NotNull(message = "subjectId is required")
+    private UUID subjectId;
 
     @NotNull(message = "questionTypeId is required")
     private UUID questionTypeId;
@@ -26,24 +28,15 @@ public class QuizQuestionRequest {
     @NotBlank(message = "questionText is required")
     private String questionText;
 
-    @NotNull(message = "points is required")
-    @DecimalMin(value = "0.1", message = "points must be at least 0.1")
-    private Double points;
+    /** Điểm mặc định gợi ý (optional). */
+    @DecimalMin(value = "0.1", message = "defaultPoints must be at least 0.1")
+    private Double defaultPoints;
 
-    @NotNull(message = "sortOrder is required")
-    @Min(value = 0, message = "sortOrder must be >= 0")
-    private Integer sortOrder;
-
-    /** Nếu câu hỏi lấy từ ngân hàng câu hỏi thì gắn id gốc để đồng bộ. Optional. */
-    private UUID bankQuestionId;
-
-    /** Tài liệu nguồn của câu hỏi (AI tự điền, hoặc giảng viên giữ lại khi sửa). Optional. */
     private UUID sourceDocumentId;
 
-    /** Đoạn trích tài liệu nguồn để đối chiếu. Optional. */
     private String sourceExcerpt;
 
     @NotEmpty(message = "options are required")
     @Valid
-    private List<QuizOptionRequest> options;
+    private List<BankQuestionOptionRequest> options;
 }

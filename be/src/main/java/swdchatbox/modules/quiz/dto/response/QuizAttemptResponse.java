@@ -13,6 +13,10 @@ public class QuizAttemptResponse {
     private UUID id;
     private UUID quizId;
     private String quizTitle;
+    private UUID variantId;
+    private Integer variantNumber;
+    /** false = giảng viên ẩn điểm; khi đó totalScore/maxScore/percentage/answers sẽ null/rỗng. */
+    private Boolean resultsVisible;
     private Double totalScore;
     private Double maxScore;
     private Double percentage;
