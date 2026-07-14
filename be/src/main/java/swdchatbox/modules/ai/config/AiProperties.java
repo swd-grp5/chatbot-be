@@ -9,9 +9,10 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "app.ai")
 @Getter
 @Setter
+// đây là config cho AI để test model nào ngon
 public class AiProperties {
 
-    private String provider = "gemini";
+    private String provider = "gemini"; // "gemini" or "openai"
 
     private String geminiApiKey;
     private String geminiChatModel = "gemini-3.5-flash";

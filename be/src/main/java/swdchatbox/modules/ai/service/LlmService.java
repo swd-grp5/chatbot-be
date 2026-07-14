@@ -67,6 +67,8 @@ public class LlmService {
         return generateWithGemini(messages, temperature, maxTokens, config.getChatModel(), config.getApiKey());
     }
 
+    // ──────────────────────── Gemini ────────────────────────
+
     private static long lastGeminiRequestTime = 0;
     private static final long GEMINI_DELAY_MS = 3000;
 
@@ -146,6 +148,8 @@ public class LlmService {
             throw new RuntimeException("LLM API call failed", e);
         }
     }
+
+    // ──────────────────────── OpenAI ────────────────────────
 
     private LlmResponse generateWithOpenAI(
             List<LlmMessage> messages,

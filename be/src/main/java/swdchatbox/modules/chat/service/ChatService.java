@@ -153,7 +153,8 @@ public class ChatService {
                 .role(MessageRole.USER)
                 .content(userQuestion)
                 .build();
-        messageRepository.save(userMessage);
+        userMessage = messageRepository.save(userMessage);
+        final UUID savedUserMessageId = userMessage.getId();
 
         // 2. Embed the user question
         List<Double> queryVector;
@@ -161,7 +162,8 @@ public class ChatService {
             queryVector = embeddingService.embed(userQuestion);
         } catch (Exception e) {
             log.error("Failed to embed user question", e);
-            return buildErrorResponse(conversation, "Không thể xử lý câu hỏi. Vui lòng thử lại.");
+            return buildErrorResponse(conversation, userMessage,
+                    "Không thể xử lý câu hỏi. Vui lòng thử lại.");
         }
 
         EffectiveAiConfig aiConfig = modelSettingService.resolveEffectiveConfig();
@@ -188,7 +190,7 @@ public class ChatService {
                 .findAllByConversation_IdOrderByCreatedAtAsc(conversationId);
         // Loại bỏ user message vừa lưu (tin nhắn cuối cùng)
         List<ChatMessage> history = allHistory.stream()
-                .filter(m -> !m.getId().equals(userMessage.getId()))
+                .filter(m -> !m.getId().equals(savedUserMessageId))
                 .toList();
         // Giới hạn số tin nhắn lịch sử (conversationHistoryLimit * 2: user + assistant)
         int historyLimit = aiProperties.getConversationHistoryLimit() * 2;
@@ -209,7 +211,8 @@ public class ChatService {
             llmResponse = llmService.generate(llmMessages);
         } catch (Exception e) {
             log.error("LLM generation failed", e);
-            return buildErrorResponse(conversation, "Không thể tạo câu trả lời. Vui lòng thử lại.");
+            return buildErrorResponse(conversation, userMessage,
+                    "Không thể tạo câu trả lời. Vui lòng thử lại.");
         }
 
         // Consume credit since LLM generation succeeded!
@@ -238,7 +241,8 @@ public class ChatService {
                 conversationId, retrievedChunks.size(), llmResponse.getTotalTokens());
 
         return ChatAnswerResponse.builder()
-                .message(toMessageResponse(assistantMessage))
+                .userMessage(toMessageResponse(userMessage))
+                .assistantMessage(toMessageResponse(assistantMessage))
                 .citations(citationResponses)
                 .build();
     }
@@ -400,7 +404,10 @@ public class ChatService {
         return responses;
     }
 
-    private ChatAnswerResponse buildErrorResponse(ChatConversation conversation, String errorMessage) {
+    private ChatAnswerResponse buildErrorResponse(
+            ChatConversation conversation,
+            ChatMessage userMessage,
+            String errorMessage) {
         ChatMessage errorMsg = ChatMessage.builder()
                 .conversation(conversation)
                 .role(MessageRole.ASSISTANT)
@@ -409,7 +416,8 @@ public class ChatService {
         errorMsg = messageRepository.save(errorMsg);
 
         return ChatAnswerResponse.builder()
-                .message(toMessageResponse(errorMsg))
+                .userMessage(toMessageResponse(userMessage))
+                .assistantMessage(toMessageResponse(errorMsg))
                 .citations(List.of())
                 .build();
     }

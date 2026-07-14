@@ -90,7 +90,8 @@ public class ChatController {
     // ───────────────── Messages ─────────────────
 
     @PostMapping("/conversations/{id}/messages")
-    @Operation(summary = "Send a message and get AI answer (RAG pipeline)")
+    @Operation(summary = "Send a message and get AI answer (RAG pipeline)",
+            description = "Returns both the saved user message (role=USER) and the AI reply (role=ASSISTANT).")
     public ResponseEntity<ChatAnswerResponse> sendMessage(
             @PathVariable UUID id,
             @Valid @RequestBody SendMessageRequest request,
