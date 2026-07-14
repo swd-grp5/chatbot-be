@@ -29,8 +29,10 @@ public class PromptBuilder {
             3. Nếu người dùng yêu cầu tóm tắt / tổng quan một tài liệu, hãy tóm tắt dựa trên \
             các đoạn tham khảo của đúng tài liệu đó; nêu các ý chính, không nói là thiếu nội dung \
             chỉ vì câu hỏi chung chung.
-            4. Mỗi ý lấy từ tài liệu phải có trích dẫn dạng [n] kèm tên file, ví dụ: [1] Present Require.
-            5. Cuối câu trả lời, luôn có mục "Nguồn:" liệt kê từng [n] → tên tài liệu (và trang nếu có).
+            4. Mỗi ý lấy từ tài liệu phải có trích dẫn dạng [n] kèm tên file, ví dụ: [1] Present Require. \
+            CHỈ cite các [n] thực sự dùng để trả lời — không liệt kê mọi đoạn tham khảo.
+            5. Cuối câu trả lời, luôn có mục "Nguồn:" liệt kê ĐÚNG các [n] đã cite trong bài \
+            (không thêm [n] thừa) → tên tài liệu (và trang nếu có).
             6. Trả lời bằng tiếng Việt rõ ràng, mạch lạc. Thuật ngữ chuyên ngành giữ nguyên tiếng Anh nếu tài liệu dùng vậy.
             7. Không nêu tài liệu không nằm trong danh sách đã gắn / tham khảo.
             """;
@@ -115,7 +117,8 @@ public class PromptBuilder {
     private String buildContextPrompt(List<RetrievedChunk> chunks) {
         StringBuilder sb = new StringBuilder();
         sb.append("## TÀI LIỆU THAM KHẢO:\n");
-        sb.append("Chỉ được dùng các đoạn dưới đây. Mỗi [n] là một nguồn; khi trích dẫn hãy viết [n] kèm tên file.\n\n");
+        sb.append("Chỉ được dùng các đoạn dưới đây. Mỗi [n] là một nguồn; khi trích dẫn hãy viết [n] kèm tên file. ");
+        sb.append("Chỉ đánh số [n] cho đoạn bạn thực sự dùng trong câu trả lời.\n\n");
 
         for (RetrievedChunk chunk : chunks) {
             sb.append("[").append(chunk.citationIndex()).append("] ");

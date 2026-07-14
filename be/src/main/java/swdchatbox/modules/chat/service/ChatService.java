@@ -40,6 +40,8 @@ import swdchatbox.modules.embedding.service.VectorStoreService;
 import swdchatbox.modules.user.entity.User;
 
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Main service orchestrating the RAG (Retrieval-Augmented Generation) pipeline.
@@ -299,8 +301,12 @@ public class ChatService {
         // Consume credit since LLM generation succeeded!
         creditService.consume(user, "CHAT_QUESTION");
 
+        // Keep only chunks the model actually cited ([n]); fallback top-2 by score.
+        String rawAnswer = llmResponse.getContent();
+        List<PromptBuilder.RetrievedChunk> citedChunks = filterCitedChunks(rawAnswer, retrievedChunks);
+
         // 8. Save assistant message (append nguồn so FE luôn hiện tên file)
-        String answerContent = appendSourceFooter(llmResponse.getContent(), retrievedChunks);
+        String answerContent = appendSourceFooter(rawAnswer, citedChunks);
         ChatMessage assistantMessage = ChatMessage.builder()
                 .conversation(conversation)
                 .role(MessageRole.ASSISTANT)
@@ -312,15 +318,16 @@ public class ChatService {
                 .build();
         assistantMessage = messageRepository.save(assistantMessage);
 
-        // 9. Save citations
-        List<CitationResponse> citationResponses = saveCitations(assistantMessage, retrievedChunks);
+        // 9. Save citations (only cited chunks + highlight line for FE)
+        List<CitationResponse> citationResponses = saveCitations(
+                assistantMessage, citedChunks, userQuestion, answerContent);
 
         // 10. Update conversation
         conversation.setTotalMessages((int) messageRepository.countByConversation_Id(conversationId));
         conversationRepository.save(conversation);
 
-        log.info("RAG pipeline completed for conversation {}: {} chunks retrieved, {} tokens used",
-                conversationId, retrievedChunks.size(), llmResponse.getTotalTokens());
+        log.info("RAG pipeline completed for conversation {}: {} retrieved, {} cited, {} tokens used",
+                conversationId, retrievedChunks.size(), citedChunks.size(), llmResponse.getTotalTokens());
 
         return ChatAnswerResponse.builder()
                 .userMessage(toMessageResponse(userMessage))
@@ -725,6 +732,128 @@ public class ChatService {
         return sb.toString().trim();
     }
 
+    private static final Pattern CITATION_INDEX_PATTERN = Pattern.compile("\\[(\\d+)]");
+
+    /**
+     * Keep only chunks whose [n] appears in the answer. If the model forgot to cite,
+     * fall back to the top 1–2 chunks by retrieval score so the sidebar is not empty.
+     */
+    private List<PromptBuilder.RetrievedChunk> filterCitedChunks(
+            String answer, List<PromptBuilder.RetrievedChunk> retrievedChunks) {
+        if (retrievedChunks == null || retrievedChunks.isEmpty()) {
+            return List.of();
+        }
+
+        Set<Integer> citedIndices = parseCitationIndices(answer);
+        if (!citedIndices.isEmpty()) {
+            List<PromptBuilder.RetrievedChunk> filtered = retrievedChunks.stream()
+                    .filter(c -> citedIndices.contains(c.citationIndex()))
+                    .toList();
+            if (!filtered.isEmpty()) {
+                return filtered;
+            }
+        }
+
+        return retrievedChunks.stream()
+                .sorted(Comparator.comparingDouble(
+                        (PromptBuilder.RetrievedChunk c) -> c.score() != null ? c.score() : 0.0)
+                        .reversed())
+                .limit(2)
+                .sorted(Comparator.comparingInt(PromptBuilder.RetrievedChunk::citationIndex))
+                .toList();
+    }
+
+    private Set<Integer> parseCitationIndices(String answer) {
+        if (answer == null || answer.isBlank()) {
+            return Set.of();
+        }
+        LinkedHashSet<Integer> indices = new LinkedHashSet<>();
+        Matcher matcher = CITATION_INDEX_PATTERN.matcher(answer);
+        while (matcher.find()) {
+            try {
+                indices.add(Integer.parseInt(matcher.group(1)));
+            } catch (NumberFormatException ignored) {
+                // skip malformed
+            }
+        }
+        return indices;
+    }
+
+    /**
+     * Pick the line/sentence inside a chunk that best overlaps the question + answer
+     * (for FE bold/highlight on citation click).
+     */
+    private String extractHighlightText(String chunkContent, String question, String answer) {
+        if (chunkContent == null || chunkContent.isBlank()) {
+            return null;
+        }
+
+        List<String> candidates = splitHighlightCandidates(chunkContent);
+        if (candidates.isEmpty()) {
+            return truncate(chunkContent.trim(), 300);
+        }
+        if (candidates.size() == 1) {
+            return truncate(candidates.get(0), 300);
+        }
+
+        Set<String> keywords = new LinkedHashSet<>();
+        keywords.addAll(extractKeywords(question));
+        keywords.addAll(extractKeywords(stripSourceFooter(answer)));
+        if (keywords.isEmpty()) {
+            return truncate(candidates.get(0), 300);
+        }
+
+        String best = candidates.get(0);
+        int bestScore = -1;
+        for (String candidate : candidates) {
+            String haystack = normalizeForMatch(candidate);
+            if (haystack.isBlank()) {
+                continue;
+            }
+            int score = 0;
+            for (String kw : keywords) {
+                if (haystack.contains(kw)) {
+                    score += kw.length();
+                }
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+        return truncate(best, 300);
+    }
+
+    private List<String> splitHighlightCandidates(String content) {
+        List<String> result = new ArrayList<>();
+        for (String line : content.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            // Further split long lines on sentence boundaries.
+            String[] sentences = trimmed.split("(?<=[.!?])\\s+");
+            for (String sentence : sentences) {
+                String s = sentence.trim();
+                if (s.length() >= 8) {
+                    result.add(s);
+                }
+            }
+        }
+        return result;
+    }
+
+    private String stripSourceFooter(String answer) {
+        if (answer == null) {
+            return "";
+        }
+        int idx = answer.toLowerCase(Locale.ROOT).indexOf("nguồn:");
+        if (idx >= 0) {
+            return answer.substring(0, idx);
+        }
+        return answer;
+    }
+
     /**
      * Enrich vector search results with document chunk data from MySQL.
      */
@@ -794,8 +923,11 @@ public class ChatService {
     /**
      * Save citation records linking the assistant message to the source chunks.
      */
-    private List<CitationResponse> saveCitations(ChatMessage assistantMessage,
-            List<PromptBuilder.RetrievedChunk> retrievedChunks) {
+    private List<CitationResponse> saveCitations(
+            ChatMessage assistantMessage,
+            List<PromptBuilder.RetrievedChunk> retrievedChunks,
+            String question,
+            String answer) {
         List<CitationResponse> responses = new ArrayList<>();
 
         for (PromptBuilder.RetrievedChunk chunk : retrievedChunks) {
@@ -811,6 +943,9 @@ public class ChatService {
                 }
 
                 if (docChunk != null && document != null) {
+                    String quoted = truncate(chunk.content(), 2000);
+                    String highlight = extractHighlightText(chunk.content(), question, answer);
+
                     MessageCitation citation = MessageCitation.builder()
                             .message(assistantMessage)
                             .chunk(docChunk)
@@ -819,7 +954,8 @@ public class ChatService {
                             .score(chunk.score())
                             .pageStart(chunk.pageStart())
                             .pageEnd(chunk.pageEnd())
-                            .quotedText(truncate(chunk.content(), 500))
+                            .quotedText(quoted)
+                            .highlightText(highlight)
                             .build();
                     citation = citationRepository.save(citation);
 
@@ -830,6 +966,7 @@ public class ChatService {
                             .documentTitle(document.getTitle())
                             .chunkId(docChunk.getId())
                             .quotedText(citation.getQuotedText())
+                            .highlightText(citation.getHighlightText())
                             .pageStart(chunk.pageStart())
                             .pageEnd(chunk.pageEnd())
                             .score(chunk.score())

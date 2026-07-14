@@ -47,6 +47,10 @@ public class MessageCitation {
     @Column(columnDefinition = "TEXT")
     private String quotedText;
 
+    /** Best-matching line/sentence within quotedText for FE highlight. */
+    @Column(length = 1000)
+    private String highlightText;
+
     @CreationTimestamp
     @Column(updatable = false)
     private LocalDateTime createdAt;
