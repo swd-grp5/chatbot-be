@@ -550,7 +550,7 @@ public class ChatService {
             "la", "gi", "cua", "trong", "file", "tai", "lieu", "cho", "va", "co",
             "the", "nao", "bao", "nhieu", "khi", "o", "dau", "vi", "sao", "tai_sao",
             "ban", "minh", "hay", "cac", "mot", "nhung", "voi", "de", "duoc", "thi",
-            "a", "an", "the", "of", "in", "is", "are", "what", "when", "where", "how");
+            "a", "an", "of", "in", "is", "are", "what", "when", "where", "how");
 
     /**
      * Merge semantic chunks with lexical keyword matches from the given docs.
