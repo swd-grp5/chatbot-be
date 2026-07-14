@@ -80,8 +80,13 @@ public class DocumentIndexingService {
                 documentChunkRepository.saveAll(chunks);
                 log.info("Indexed {} chunks with embeddings for documentId={}", chunks.size(), documentId);
             } catch (Exception e) {
-                log.error("Failed to generate embeddings for documentId={}", documentId, e);
-                throw new RuntimeException("Embedding generation failed during indexing", e);
+                log.error(
+                        "[index] step=embedding.batch documentId={} chunkCount={} error={}",
+                        documentId,
+                        chunks.size(),
+                        e.getMessage(),
+                        e);
+                throw new RuntimeException("Embedding generation failed during indexing: " + e.getMessage(), e);
             }
         }
 

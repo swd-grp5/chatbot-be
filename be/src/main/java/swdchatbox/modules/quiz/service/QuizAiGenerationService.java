@@ -90,6 +90,7 @@ public class QuizAiGenerationService {
                 .orElseThrow(() -> new ResourceNotFoundException("Multiple choice question type not found"));
 
         String prompt = buildPrompt(subject, questionCount, totalPoints, distribution, context);
+        var aiConfig = modelSettingService.resolveEffectiveConfig();
         LlmResponse llmResponse;
         try {
             llmResponse = llmService.generate(List.of(
@@ -97,7 +98,13 @@ public class QuizAiGenerationService {
                     LlmMessage.builder().role("user").content(prompt).build()
             ), 0.4, 4096);
         } catch (Exception e) {
-            log.error("AI quiz generation failed for subject {}", subject.getId(), e);
+            log.error(
+                    "[quiz] step=llm.generate subjectId={} provider={} chatModel={} error={}",
+                    subject.getId(),
+                    aiConfig.getProvider(),
+                    aiConfig.getChatModel(),
+                    e.getMessage(),
+                    e);
             throw new BadRequestException("AI failed to generate quiz. Please try again.");
         }
 
@@ -222,7 +229,14 @@ public class QuizAiGenerationService {
             }
             return sources;
         } catch (Exception e) {
-            log.warn("Vector retrieval for quiz generation failed, falling back to extracted text", e);
+            var aiConfig = modelSettingService.resolveEffectiveConfig();
+            log.warn(
+                    "[quiz] step=vector-retrieval subjectId={} provider={} embeddingModel={} error={} — falling back to extracted text",
+                    subjectId,
+                    aiConfig.getProvider(),
+                    aiConfig.getEmbeddingModel(),
+                    e.getMessage(),
+                    e);
             return List.of();
         }
     }
@@ -462,7 +476,10 @@ public class QuizAiGenerationService {
         } catch (BadRequestException e) {
             throw e;
         } catch (Exception e) {
-            log.error("Failed to parse AI quiz JSON: {}", raw, e);
+            log.error("Failed to parse AI quiz JSON (len={}): {}",
+                    raw == null ? 0 : raw.length(),
+                    raw == null ? "null" : raw.substring(0, Math.min(800, raw.length())),
+                    e);
             throw new BadRequestException("AI returned invalid quiz format. Please try again.");
         }
     }

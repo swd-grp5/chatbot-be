@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import swdchatbox.modules.ai.util.AiApiErrorSupport;
 import swdchatbox.modules.setting.dto.EffectiveAiConfig;
 import swdchatbox.modules.setting.service.ModelSettingService;
 import swdchatbox.shared.exception.BadRequestException;
@@ -54,7 +55,8 @@ public class EmbeddingService {
     }
 
     private List<Double> embedWithGemini(String text, String model, String apiKey) {
-        String url = "/v1beta/models/" + model + ":embedContent?key=" + apiKey;
+        String endpoint = "/v1beta/models/" + model + ":embedContent";
+        String url = endpoint + "?key=" + apiKey;
 
         Map<String, Object> body = Map.of(
                 "model", "models/" + model,
@@ -76,13 +78,14 @@ public class EmbeddingService {
             }
             return embedding;
         } catch (Exception e) {
-            log.error("Gemini embedding failed for text: {}...", text.substring(0, Math.min(50, text.length())), e);
-            throw new RuntimeException("Embedding API call failed", e);
+            AiApiErrorSupport.logFailure(log, "embedding.single", "gemini", model, endpoint, e);
+            throw AiApiErrorSupport.wrap("embedding.single", "gemini", model, endpoint, e);
         }
     }
 
     private List<List<Double>> embedBatchWithGemini(List<String> texts, String model, String apiKey) {
-        String url = "/v1beta/models/" + model + ":batchEmbedContents?key=" + apiKey;
+        String endpoint = "/v1beta/models/" + model + ":batchEmbedContents";
+        String url = endpoint + "?key=" + apiKey;
 
         List<Map<String, Object>> requests = texts.stream()
                 .map(text -> Map.<String, Object>of(
@@ -113,8 +116,8 @@ public class EmbeddingService {
             }
             return result;
         } catch (Exception e) {
-            log.error("Gemini batch embedding failed for {} texts", texts.size(), e);
-            throw new RuntimeException("Batch embedding API call failed", e);
+            AiApiErrorSupport.logFailure(log, "embedding.batch(count=" + texts.size() + ")", "gemini", model, endpoint, e);
+            throw AiApiErrorSupport.wrap("embedding.batch(count=" + texts.size() + ")", "gemini", model, endpoint, e);
         }
     }
 
@@ -123,13 +126,14 @@ public class EmbeddingService {
     }
 
     private List<List<Double>> embedBatchWithOpenAI(List<String> texts, String model, String apiKey) {
+        String endpoint = "/v1/embeddings";
         Map<String, Object> body = Map.of(
                 "model", model,
                 "input", texts);
 
         try {
             String response = openaiRestClient.post()
-                    .uri("/v1/embeddings")
+                    .uri(endpoint)
                     .contentType(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + apiKey)
                     .body(body)
@@ -149,8 +153,8 @@ public class EmbeddingService {
             }
             return result;
         } catch (Exception e) {
-            log.error("OpenAI batch embedding failed for {} texts", texts.size(), e);
-            throw new RuntimeException("Embedding API call failed", e);
+            AiApiErrorSupport.logFailure(log, "embedding.batch(count=" + texts.size() + ")", "openai", model, endpoint, e);
+            throw AiApiErrorSupport.wrap("embedding.batch(count=" + texts.size() + ")", "openai", model, endpoint, e);
         }
     }
 

@@ -68,13 +68,13 @@ public class ChatController {
     }
 
     @PatchMapping("/conversations/{id}")
-    @Operation(summary = "Update conversation title")
+    @Operation(summary = "Update conversation title and/or selected documents")
     public ResponseEntity<ConversationResponse> updateConversation(
             @PathVariable UUID id,
             @Valid @RequestBody UpdateConversationRequest request,
             @AuthenticationPrincipal UserDetails userDetails) {
         User user = getCurrentUser(userDetails);
-        return ResponseEntity.ok(chatService.updateConversationTitle(id, user.getId(), request));
+        return ResponseEntity.ok(chatService.updateConversation(id, user.getId(), request));
     }
 
     @DeleteMapping("/conversations/{id}")

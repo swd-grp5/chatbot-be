@@ -10,6 +10,7 @@ import org.springframework.web.client.RestClient;
 import swdchatbox.modules.ai.config.AiProperties;
 import swdchatbox.modules.ai.dto.LlmMessage;
 import swdchatbox.modules.ai.dto.LlmResponse;
+import swdchatbox.modules.ai.util.AiApiErrorSupport;
 import swdchatbox.modules.setting.dto.EffectiveAiConfig;
 import swdchatbox.modules.setting.service.ModelSettingService;
 import swdchatbox.shared.exception.BadRequestException;
@@ -92,7 +93,8 @@ public class LlmService {
             String model,
             String apiKey) {
         enforceGeminiRateLimit();
-        String url = "/v1beta/models/" + model + ":generateContent?key=" + apiKey;
+        String endpoint = "/v1beta/models/" + model + ":generateContent";
+        String url = endpoint + "?key=" + apiKey;
 
         List<Map<String, Object>> contents = new ArrayList<>();
         String systemInstruction = null;
@@ -144,8 +146,8 @@ public class LlmService {
                     .totalTokens(promptTokens + completionTokens)
                     .build();
         } catch (Exception e) {
-            log.error("Gemini LLM call failed", e);
-            throw new RuntimeException("LLM API call failed", e);
+            AiApiErrorSupport.logFailure(log, "llm.generate", "gemini", model, endpoint, e);
+            throw AiApiErrorSupport.wrap("llm.generate", "gemini", model, endpoint, e);
         }
     }
 
@@ -157,6 +159,7 @@ public class LlmService {
             int maxTokens,
             String model,
             String apiKey) {
+        String endpoint = "/v1/chat/completions";
         List<Map<String, String>> openaiMessages = messages.stream()
                 .map(msg -> Map.of("role", msg.getRole(), "content", msg.getContent()))
                 .toList();
@@ -169,7 +172,7 @@ public class LlmService {
 
         try {
             String response = openaiRestClient.post()
-                    .uri("/v1/chat/completions")
+                    .uri(endpoint)
                     .contentType(MediaType.APPLICATION_JSON)
                     .header("Authorization", "Bearer " + apiKey)
                     .body(body)
@@ -192,8 +195,8 @@ public class LlmService {
                     .totalTokens(promptTokens + completionTokens)
                     .build();
         } catch (Exception e) {
-            log.error("OpenAI LLM call failed", e);
-            throw new RuntimeException("LLM API call failed", e);
+            AiApiErrorSupport.logFailure(log, "llm.generate", "openai", model, endpoint, e);
+            throw AiApiErrorSupport.wrap("llm.generate", "openai", model, endpoint, e);
         }
     }
 

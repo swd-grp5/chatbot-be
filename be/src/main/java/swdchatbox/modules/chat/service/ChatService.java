@@ -79,20 +79,11 @@ public class ChatService {
             subject = subjectEnrollmentService.findActiveSubject(request.getSubjectId());
         }
 
-        String documentIdsJson = null;
-        if (request.getDocumentIds() != null && !request.getDocumentIds().isEmpty()) {
-            try {
-                documentIdsJson = objectMapper.writeValueAsString(request.getDocumentIds());
-            } catch (Exception e) {
-                throw new BadRequestException("Invalid document IDs");
-            }
-        }
-
         ChatConversation conversation = ChatConversation.builder()
                 .user(user)
                 .subject(subject)
                 .title(request.getTitle())
-                .selectedDocumentIdsJson(documentIdsJson)
+                .selectedDocumentIdsJson(serializeDocumentIds(request.getDocumentIds()))
                 .totalMessages(0)
                 .active(true)
                 .build();
@@ -120,10 +111,17 @@ public class ChatService {
     }
 
     @Transactional
-    public ConversationResponse updateConversationTitle(UUID conversationId, UUID userId,
+    public ConversationResponse updateConversation(UUID conversationId, UUID userId,
             UpdateConversationRequest request) {
         ChatConversation conversation = findConversation(conversationId, userId);
-        conversation.setTitle(request.getTitle());
+
+        if (request.getTitle() != null && !request.getTitle().isBlank()) {
+            conversation.setTitle(request.getTitle().trim());
+        }
+        if (request.getDocumentIds() != null) {
+            conversation.setSelectedDocumentIdsJson(serializeDocumentIds(request.getDocumentIds()));
+        }
+
         conversation = conversationRepository.save(conversation);
         return toConversationResponse(conversation);
     }
@@ -156,17 +154,24 @@ public class ChatService {
         userMessage = messageRepository.save(userMessage);
         final UUID savedUserMessageId = userMessage.getId();
 
+        // Resolve AI config early so failure logs can name provider/model
+        EffectiveAiConfig aiConfig = modelSettingService.resolveEffectiveConfig();
+
         // 2. Embed the user question
         List<Double> queryVector;
         try {
             queryVector = embeddingService.embed(userQuestion);
         } catch (Exception e) {
-            log.error("Failed to embed user question", e);
+            log.error(
+                    "[chat] step=embed-query conversationId={} provider={} embeddingModel={} error={}",
+                    conversationId,
+                    aiConfig.getProvider(),
+                    aiConfig.getEmbeddingModel(),
+                    e.getMessage(),
+                    e);
             return buildErrorResponse(conversation, userMessage,
                     "Không thể xử lý câu hỏi. Vui lòng thử lại.");
         }
-
-        EffectiveAiConfig aiConfig = modelSettingService.resolveEffectiveConfig();
 
         // 3. Vector search — find relevant document chunks
         Map<String, Object> filter = buildSearchFilter(conversation);
@@ -177,7 +182,14 @@ public class ChatService {
                     aiConfig.getTopK(),
                     filter);
         } catch (Exception e) {
-            log.error("Vector search failed", e);
+            log.error(
+                    "[chat] step=vector-search conversationId={} provider={} embeddingModel={} topK={} error={}",
+                    conversationId,
+                    aiConfig.getProvider(),
+                    aiConfig.getEmbeddingModel(),
+                    aiConfig.getTopK(),
+                    e.getMessage(),
+                    e);
             searchResults = List.of();
         }
 
@@ -210,7 +222,14 @@ public class ChatService {
         try {
             llmResponse = llmService.generate(llmMessages);
         } catch (Exception e) {
-            log.error("LLM generation failed", e);
+            log.error(
+                    "[chat] step=llm.generate conversationId={} provider={} chatModel={} messageCount={} error={}",
+                    conversationId,
+                    aiConfig.getProvider(),
+                    aiConfig.getChatModel(),
+                    llmMessages.size(),
+                    e.getMessage(),
+                    e);
             return buildErrorResponse(conversation, userMessage,
                     "Không thể tạo câu trả lời. Vui lòng thử lại.");
         }
@@ -430,11 +449,44 @@ public class ChatService {
                 .title(conv.getTitle())
                 .subjectId(conv.getSubject() != null ? conv.getSubject().getId() : null)
                 .subjectName(conv.getSubject() != null ? conv.getSubject().getName() : null)
+                .documentIds(parseDocumentIds(conv.getSelectedDocumentIdsJson()))
                 .totalMessages(conv.getTotalMessages())
                 .active(conv.getActive())
                 .createdAt(conv.getCreatedAt())
                 .updatedAt(conv.getUpdatedAt())
                 .build();
+    }
+
+    private String serializeDocumentIds(List<UUID> documentIds) {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(documentIds);
+        } catch (Exception e) {
+            throw new BadRequestException("Invalid document IDs");
+        }
+    }
+
+    private List<UUID> parseDocumentIds(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<String> raw = objectMapper.readValue(json, new TypeReference<List<String>>() {
+            });
+            List<UUID> ids = new ArrayList<>();
+            for (String id : raw) {
+                if (id == null || id.isBlank()) {
+                    continue;
+                }
+                ids.add(UUID.fromString(id));
+            }
+            return ids;
+        } catch (Exception e) {
+            log.warn("Failed to parse selectedDocumentIdsJson", e);
+            return List.of();
+        }
     }
 
     private MessageResponse toMessageResponse(ChatMessage msg) {
