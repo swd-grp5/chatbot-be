@@ -4,6 +4,7 @@ import lombok.Builder;
 import lombok.Getter;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -23,4 +24,6 @@ public class MessageResponse {
     private Integer completionTokens;
     private Integer totalTokens;
     private LocalDateTime createdAt;
+    /** Present for ASSISTANT messages that have source citations. */
+    private List<CitationResponse> citations;
 }

@@ -134,9 +134,18 @@ public class ChatService {
         // Verify ownership
         findConversation(conversationId, userId);
 
-        return messageRepository
-                .findAllByConversation_IdOrderByCreatedAtAsc(conversationId, pageable)
-                .map(this::toMessageResponse);
+        Page<ChatMessage> messagesPage = messageRepository
+                .findAllByConversation_IdOrderByCreatedAtAsc(conversationId, pageable);
+
+        List<UUID> messageIds = messagesPage.getContent().stream()
+                .map(ChatMessage::getId)
+                .toList();
+
+        Map<UUID, List<CitationResponse>> citationsByMessageId = loadCitationsForMessages(messageIds);
+
+        return messagesPage.map(msg -> toMessageResponse(
+                msg,
+                citationsByMessageId.getOrDefault(msg.getId(), List.of())));
     }
 
     // ───────────────── RAG Pipeline: Send Message ─────────────────
@@ -336,8 +345,8 @@ public class ChatService {
                 conversationId, retrievedChunks.size(), citedChunks.size(), llmResponse.getTotalTokens());
 
         return ChatAnswerResponse.builder()
-                .userMessage(toMessageResponse(userMessage))
-                .assistantMessage(toMessageResponse(assistantMessage))
+                .userMessage(toMessageResponse(userMessage, List.of()))
+                .assistantMessage(toMessageResponse(assistantMessage, citationResponses))
                 .citations(citationResponses)
                 .build();
     }
@@ -1131,18 +1140,7 @@ public class ChatService {
                             .build();
                     citation = citationRepository.save(citation);
 
-                    responses.add(CitationResponse.builder()
-                            .id(citation.getId())
-                            .citationIndex(chunk.citationIndex())
-                            .documentId(document.getId())
-                            .documentTitle(document.getTitle())
-                            .chunkId(docChunk.getId())
-                            .quotedText(citation.getQuotedText())
-                            .highlightText(citation.getHighlightText())
-                            .pageStart(chunk.pageStart())
-                            .pageEnd(chunk.pageEnd())
-                            .score(chunk.score())
-                            .build());
+                    responses.add(toCitationResponse(citation));
                 }
             } catch (Exception e) {
                 log.warn("Failed to save citation for chunk {}", chunk.chunkId(), e);
@@ -1166,8 +1164,8 @@ public class ChatService {
         errorMsg = messageRepository.save(errorMsg);
 
         return ChatAnswerResponse.builder()
-                .userMessage(toMessageResponse(userMessage))
-                .assistantMessage(toMessageResponse(errorMsg))
+                .userMessage(toMessageResponse(userMessage, List.of()))
+                .assistantMessage(toMessageResponse(errorMsg, List.of()))
                 .citations(List.of())
                 .build();
     }
@@ -1220,7 +1218,41 @@ public class ChatService {
         }
     }
 
-    private MessageResponse toMessageResponse(ChatMessage msg) {
+    private Map<UUID, List<CitationResponse>> loadCitationsForMessages(List<UUID> messageIds) {
+        if (messageIds.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<UUID, List<CitationResponse>> citationsByMessageId = new LinkedHashMap<>();
+        for (MessageCitation citation : citationRepository.findAllByMessageIdInWithRelations(messageIds)) {
+            UUID messageId = citation.getMessage().getId();
+            citationsByMessageId
+                    .computeIfAbsent(messageId, ignored -> new ArrayList<>())
+                    .add(toCitationResponse(citation));
+        }
+        return citationsByMessageId;
+    }
+
+    private CitationResponse toCitationResponse(MessageCitation citation) {
+        return CitationResponse.builder()
+                .id(citation.getId())
+                .citationIndex(citation.getCitationIndex())
+                .documentId(citation.getDocument().getId())
+                .documentTitle(citation.getDocument().getTitle())
+                .chunkId(citation.getChunk().getId())
+                .quotedText(citation.getQuotedText())
+                .highlightText(citation.getHighlightText())
+                .pageStart(citation.getPageStart())
+                .pageEnd(citation.getPageEnd())
+                .score(citation.getScore())
+                .build();
+    }
+
+    private MessageResponse toMessageResponse(ChatMessage msg, List<CitationResponse> citations) {
+        List<CitationResponse> messageCitations = msg.getRole() == MessageRole.ASSISTANT
+                ? citations
+                : List.of();
+
         return MessageResponse.builder()
                 .id(msg.getId())
                 .role(msg.getRole().name())
@@ -1230,6 +1262,7 @@ public class ChatService {
                 .completionTokens(msg.getCompletionTokens())
                 .totalTokens(msg.getTotalTokens())
                 .createdAt(msg.getCreatedAt())
+                .citations(messageCitations)
                 .build();
     }
 
