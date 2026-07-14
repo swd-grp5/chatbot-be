@@ -87,14 +87,60 @@ public class DocumentChunkingService {
             return sentenceBreak;
         }
 
-        // 3. Ranh giới khoảng trắng (không cắt giữa từ).
-        int wordBreak = lastBoundary(content, minEnd, hardEnd, ch -> Character.isWhitespace(ch));
+        // 3. Ranh giới khoảng trắng / separator (không cắt giữa từ).
+        int wordBreak = lastBoundary(content, minEnd, hardEnd, this::isWordBreak);
         if (wordBreak > start) {
             return wordBreak;
         }
 
-        // 4. Không có ranh giới hợp lý -> cắt cứng.
-        return hardEnd;
+        // 4. Vẫn đang giữa từ tại hardEnd → lùi về đầu từ hiện tại.
+        int backtracked = backtrackToWordStart(content, start, hardEnd);
+        if (backtracked > start) {
+            return backtracked;
+        }
+
+        // 5. Không có ranh giới hợp lý -> cắt cứng (tránh cắt giữa surrogate pair).
+        return avoidSurrogateSplit(content, hardEnd);
+    }
+
+    /** Khoảng trắng + zero-width / NBSP thường gặp trong PDF. */
+    private boolean isWordBreak(char ch) {
+        return Character.isWhitespace(ch)
+                || ch == '\u00A0' // NBSP
+                || ch == '\u200B' // ZWSP
+                || ch == '\u200C'
+                || ch == '\u200D'
+                || ch == '\uFEFF';
+    }
+
+    private boolean isWordChar(char ch) {
+        return Character.isLetterOrDigit(ch);
+    }
+
+    /**
+     * Nếu hardEnd nằm giữa một từ, trả về vị trí đầu từ đó (không cắt "values" → "v").
+     */
+    private int backtrackToWordStart(String content, int start, int hardEnd) {
+        if (hardEnd <= start || hardEnd > content.length()) {
+            return -1;
+        }
+        if (hardEnd < content.length()
+                && isWordChar(content.charAt(hardEnd))
+                && isWordChar(content.charAt(hardEnd - 1))) {
+            int i = hardEnd;
+            while (i > start && isWordChar(content.charAt(i - 1))) {
+                i--;
+            }
+            return i > start ? i : -1;
+        }
+        return -1;
+    }
+
+    private int avoidSurrogateSplit(String content, int index) {
+        if (index > 0 && index < content.length() && Character.isLowSurrogate(content.charAt(index))) {
+            return index - 1;
+        }
+        return index;
     }
 
     /** Trả về vị trí (loại trừ) ngay sau ký tự ranh giới cuối cùng trong [from, to). */

@@ -200,7 +200,8 @@ public class ChatService {
                 userQuestion, titleMatchedDocs, attachedDocs, summaryIntent);
         if (!summaryTargets.isEmpty()) {
             // Vague / title-only questions → load representative chunks (skip weak semantic match)
-            retrievedChunks = loadRepresentativeChunks(summaryTargets, Math.max(aiConfig.getTopK() * 2, 8));
+            retrievedChunks = dedupeNearDuplicateChunks(
+                    loadRepresentativeChunks(summaryTargets, Math.max(aiConfig.getTopK() * 2, 8)));
             log.info("[chat] step=summary-fallback conversationId={} docs={} chunks={}",
                     conversationId,
                     summaryTargets.stream().map(Document::getTitle).toList(),
@@ -244,6 +245,9 @@ public class ChatService {
                 log.info("[chat] step=title-fallback conversationId={} chunks={}",
                         conversationId, retrievedChunks.size());
             }
+
+            // Overlapping / near-identical chunks confuse the model into citing [1],[2] twice.
+            retrievedChunks = dedupeNearDuplicateChunks(retrievedChunks);
         }
 
         // Hard guard: no grounded content → return deterministic message, never let the LLM invent.
@@ -301,9 +305,11 @@ public class ChatService {
         // Consume credit since LLM generation succeeded!
         creditService.consume(user, "CHAT_QUESTION");
 
-        // Keep only chunks the model actually cited ([n]); fallback top-2 by score.
+        // Keep only chunks the model actually cited ([n]); drop near-duplicates; remap answer.
         String rawAnswer = llmResponse.getContent();
-        List<PromptBuilder.RetrievedChunk> citedChunks = filterCitedChunks(rawAnswer, retrievedChunks);
+        List<PromptBuilder.RetrievedChunk> citedBeforeDedupe = filterCitedChunks(rawAnswer, retrievedChunks);
+        List<PromptBuilder.RetrievedChunk> citedChunks = dedupeNearDuplicateChunks(citedBeforeDedupe);
+        rawAnswer = remapCitationIndicesInAnswer(rawAnswer, citedBeforeDedupe, citedChunks);
 
         // 8. Save assistant message (append nguồn so FE luôn hiện tên file)
         String answerContent = appendSourceFooter(rawAnswer, citedChunks);
@@ -763,6 +769,172 @@ public class ChatService {
                 .toList();
     }
 
+    /**
+     * Drop near-identical / heavily overlapping chunks (common with chunk overlap + hybrid retrieval)
+     * and re-number citation indices 1..n so the LLM/FE never see duplicate [1]/[2] of the same text.
+     */
+    private List<PromptBuilder.RetrievedChunk> dedupeNearDuplicateChunks(
+            List<PromptBuilder.RetrievedChunk> chunks) {
+        if (chunks == null || chunks.isEmpty()) {
+            return List.of();
+        }
+
+        List<PromptBuilder.RetrievedChunk> kept = new ArrayList<>();
+        for (PromptBuilder.RetrievedChunk candidate : chunks) {
+            int dupOf = -1;
+            for (int i = 0; i < kept.size(); i++) {
+                if (areNearDuplicateContents(kept.get(i).content(), candidate.content())) {
+                    dupOf = i;
+                    break;
+                }
+            }
+            if (dupOf < 0) {
+                kept.add(candidate);
+                continue;
+            }
+            // Prefer longer excerpt (less mid-chunk cut) then higher score.
+            if (preferChunk(candidate, kept.get(dupOf))) {
+                kept.set(dupOf, candidate);
+            }
+        }
+
+        List<PromptBuilder.RetrievedChunk> reindexed = new ArrayList<>(kept.size());
+        int idx = 1;
+        for (PromptBuilder.RetrievedChunk c : kept) {
+            reindexed.add(new PromptBuilder.RetrievedChunk(
+                    idx++,
+                    c.chunkId(),
+                    c.documentId(),
+                    c.documentTitle(),
+                    c.content(),
+                    c.pageStart(),
+                    c.pageEnd(),
+                    c.score()));
+        }
+        return reindexed;
+    }
+
+    private boolean preferChunk(PromptBuilder.RetrievedChunk a, PromptBuilder.RetrievedChunk b) {
+        int lenA = a.content() != null ? a.content().length() : 0;
+        int lenB = b.content() != null ? b.content().length() : 0;
+        if (lenA != lenB) {
+            return lenA > lenB;
+        }
+        double scoreA = a.score() != null ? a.score() : 0.0;
+        double scoreB = b.score() != null ? b.score() : 0.0;
+        return scoreA > scoreB;
+    }
+
+    /**
+     * True when two chunks largely share the same text (identical, prefix, or high overlap).
+     */
+    private boolean areNearDuplicateContents(String a, String b) {
+        String na = normalizeForMatch(a);
+        String nb = normalizeForMatch(b);
+        if (na.isEmpty() || nb.isEmpty()) {
+            return false;
+        }
+        if (na.equals(nb)) {
+            return true;
+        }
+
+        String shorter = na.length() <= nb.length() ? na : nb;
+        String longer = na.length() <= nb.length() ? nb : na;
+        int probeLen = Math.min(360, shorter.length());
+        if (probeLen < 80) {
+            return shorter.equals(longer);
+        }
+        String probe = shorter.substring(0, probeLen);
+        if (longer.contains(probe)) {
+            // Overlap ratio: shared probe is a large fraction of the shorter chunk.
+            return (double) probeLen / shorter.length() >= 0.45
+                    || (double) shorter.length() / longer.length() >= 0.75;
+        }
+
+        // Token Jaccard on a window — catches shifted overlap windows.
+        Set<String> ta = tokenSet(na, 80);
+        Set<String> tb = tokenSet(nb, 80);
+        if (ta.isEmpty() || tb.isEmpty()) {
+            return false;
+        }
+        int intersection = 0;
+        for (String t : ta) {
+            if (tb.contains(t)) {
+                intersection++;
+            }
+        }
+        int union = ta.size() + tb.size() - intersection;
+        return union > 0 && (double) intersection / union >= 0.82;
+    }
+
+    private Set<String> tokenSet(String normalized, int maxTokens) {
+        LinkedHashSet<String> tokens = new LinkedHashSet<>();
+        for (String t : normalized.split("\\s+")) {
+            if (t.length() >= 3 && !STOP_WORDS.contains(t)) {
+                tokens.add(t);
+                if (tokens.size() >= maxTokens) {
+                    break;
+                }
+            }
+        }
+        return tokens;
+    }
+
+    /**
+     * After the model cites duplicate indices, rewrite dropped [n] onto the kept index
+     * so the answer matches the deduped citation list.
+     */
+    private String remapCitationIndicesInAnswer(
+            String answer,
+            List<PromptBuilder.RetrievedChunk> beforeDedupe,
+            List<PromptBuilder.RetrievedChunk> afterDedupe) {
+        if (answer == null || beforeDedupe == null || afterDedupe == null
+                || beforeDedupe.size() <= afterDedupe.size()) {
+            return answer;
+        }
+
+        // Map each original chunkId → new citationIndex after dedupe (by content match).
+        Map<String, Integer> chunkIdToNewIndex = new HashMap<>();
+        for (PromptBuilder.RetrievedChunk kept : afterDedupe) {
+            if (kept.chunkId() != null) {
+                chunkIdToNewIndex.put(kept.chunkId(), kept.citationIndex());
+            }
+        }
+
+        Map<Integer, Integer> oldToNew = new HashMap<>();
+        for (PromptBuilder.RetrievedChunk original : beforeDedupe) {
+            Integer mapped = chunkIdToNewIndex.get(original.chunkId());
+            if (mapped != null) {
+                oldToNew.put(original.citationIndex(), mapped);
+                continue;
+            }
+            // Dropped as duplicate of some kept chunk — find which.
+            for (PromptBuilder.RetrievedChunk kept : afterDedupe) {
+                if (areNearDuplicateContents(original.content(), kept.content())) {
+                    oldToNew.put(original.citationIndex(), kept.citationIndex());
+                    break;
+                }
+            }
+        }
+
+        if (oldToNew.isEmpty()) {
+            return answer;
+        }
+
+        Matcher matcher = CITATION_INDEX_PATTERN.matcher(answer);
+        StringBuffer sb = new StringBuffer();
+        while (matcher.find()) {
+            int oldIdx = Integer.parseInt(matcher.group(1));
+            Integer newIdx = oldToNew.get(oldIdx);
+            String replacement = newIdx != null ? "[" + newIdx + "]" : matcher.group();
+            matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(sb);
+
+        // Collapse "[1], [1]" → "[1]"
+        return sb.toString().replaceAll("\\[(\\d+)](\\s*,\\s*\\[\\1])+", "[$1]");
+    }
+
     private Set<Integer> parseCitationIndices(String answer) {
         if (answer == null || answer.isBlank()) {
             return Set.of();
@@ -943,7 +1115,7 @@ public class ChatService {
                 }
 
                 if (docChunk != null && document != null) {
-                    String quoted = truncate(chunk.content(), 2000);
+                    String quoted = truncateAtWord(chunk.content(), 2500);
                     String highlight = extractHighlightText(chunk.content(), question, answer);
 
                     MessageCitation citation = MessageCitation.builder()
@@ -1062,8 +1234,30 @@ public class ChatService {
     }
 
     private String truncate(String text, int maxLength) {
-        if (text == null)
+        return truncateAtWord(text, maxLength);
+    }
+
+    /** Truncate without splitting mid-word; appends "..." when cut. */
+    private String truncateAtWord(String text, int maxLength) {
+        if (text == null) {
             return null;
-        return text.length() <= maxLength ? text : text.substring(0, maxLength) + "...";
+        }
+        if (text.length() <= maxLength) {
+            return text;
+        }
+        int end = maxLength;
+        while (end > maxLength / 2
+                && end > 0
+                && !Character.isWhitespace(text.charAt(end - 1))) {
+            end--;
+        }
+        if (end <= maxLength / 2) {
+            end = maxLength;
+            // Avoid splitting a surrogate pair.
+            if (end > 0 && end < text.length() && Character.isLowSurrogate(text.charAt(end))) {
+                end--;
+            }
+        }
+        return text.substring(0, end).trim() + "...";
     }
 }
