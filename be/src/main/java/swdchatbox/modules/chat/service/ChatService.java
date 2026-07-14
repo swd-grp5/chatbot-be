@@ -206,10 +206,11 @@ public class ChatService {
         } else {
             List<VectorSearchResult> searchResults;
             try {
-                // Title-scoped questions: keep top-K even if scores are below default threshold
-                double threshold = !titleMatchedDocs.isEmpty()
-                        ? 0.0
-                        : aiProperties.getRetrievalScoreThreshold();
+                // When scoped to the user's attached docs we keep the top-K best chunks
+                // regardless of the default threshold — cross-lingual (VN query / EN doc)
+                // cosine scores are often below 0.5 yet still the right chunks.
+                boolean scoped = (retrievalDocIds != null && !retrievalDocIds.isEmpty());
+                double threshold = scoped ? 0.0 : aiProperties.getRetrievalScoreThreshold();
                 searchResults = vectorStoreService.search(
                         queryVector,
                         aiConfig.getTopK(),
@@ -229,12 +230,29 @@ public class ChatService {
 
             retrievedChunks = enrichSearchResults(searchResults);
 
-            // If semantic search missed (common for title-only questions), fall back to doc chunks
+            // Hybrid: merge in lexical keyword matches so literal terms
+            // ("duration", "deadline") are found even when embeddings miss.
+            List<Document> lexicalScope = !titleMatchedDocs.isEmpty() ? titleMatchedDocs : attachedDocs;
+            retrievedChunks = mergeWithLexicalMatches(
+                    retrievedChunks, userQuestion, lexicalScope, aiConfig.getTopK());
+
+            // If still nothing and we matched a title, fall back to representative chunks
             if (retrievedChunks.isEmpty() && !titleMatchedDocs.isEmpty()) {
                 retrievedChunks = loadRepresentativeChunks(titleMatchedDocs, Math.max(aiConfig.getTopK() * 2, 8));
                 log.info("[chat] step=title-fallback conversationId={} chunks={}",
                         conversationId, retrievedChunks.size());
             }
+        }
+
+        // Hard guard: no grounded content → return deterministic message, never let the LLM invent.
+        if (retrievedChunks.isEmpty()) {
+            log.info("[chat] step=no-context conversationId={} — returning not-found without calling LLM",
+                    conversationId);
+            String notFound = attachedDocs.isEmpty()
+                    ? "Đoạn chat này chưa gắn tài liệu nào, nên mình chưa có nội dung để trả lời. "
+                            + "Bạn hãy gắn tài liệu vào chat rồi hỏi lại nhé."
+                    : "Xin lỗi, mình không tìm thấy nội dung phù hợp trong các tài liệu đã gắn để trả lời câu hỏi này.";
+            return buildErrorResponse(conversation, userMessage, notFound, aiConfig.getChatModel());
         }
 
         // 5. Load conversation history (lấy trực tiếp theo thứ tự tăng dần, bỏ message
@@ -522,6 +540,119 @@ public class ChatService {
                         chunk.getPageStart(),
                         chunk.getPageEnd(),
                         1.0));
+            }
+        }
+        return result;
+    }
+
+    // Vietnamese stop-words that add noise to lexical matching
+    private static final Set<String> STOP_WORDS = Set.of(
+            "la", "gi", "cua", "trong", "file", "tai", "lieu", "cho", "va", "co",
+            "the", "nao", "bao", "nhieu", "khi", "o", "dau", "vi", "sao", "tai_sao",
+            "ban", "minh", "hay", "cac", "mot", "nhung", "voi", "de", "duoc", "thi",
+            "a", "an", "the", "of", "in", "is", "are", "what", "when", "where", "how");
+
+    /**
+     * Merge semantic chunks with lexical keyword matches from the given docs.
+     * Ensures literal terms in the question (e.g. "duration") surface the right chunk
+     * even when cross-lingual embedding similarity is low. Deduped by chunkId, re-indexed.
+     */
+    private List<PromptBuilder.RetrievedChunk> mergeWithLexicalMatches(
+            List<PromptBuilder.RetrievedChunk> semanticChunks,
+            String question,
+            List<Document> scopeDocs,
+            int topK) {
+        List<String> keywords = extractKeywords(question);
+        List<PromptBuilder.RetrievedChunk> lexical = keywords.isEmpty()
+                ? List.of()
+                : lexicalSearch(keywords, scopeDocs, Math.max(topK, 5));
+
+        if (lexical.isEmpty()) {
+            return semanticChunks;
+        }
+
+        // Preserve semantic order first, then append new lexical hits.
+        LinkedHashMap<String, PromptBuilder.RetrievedChunk> byChunk = new LinkedHashMap<>();
+        for (PromptBuilder.RetrievedChunk c : semanticChunks) {
+            byChunk.put(c.chunkId(), c);
+        }
+        for (PromptBuilder.RetrievedChunk c : lexical) {
+            byChunk.putIfAbsent(c.chunkId(), c);
+        }
+
+        // Re-number citation indices sequentially.
+        List<PromptBuilder.RetrievedChunk> merged = new ArrayList<>();
+        int idx = 1;
+        for (PromptBuilder.RetrievedChunk c : byChunk.values()) {
+            merged.add(new PromptBuilder.RetrievedChunk(
+                    idx++, c.chunkId(), c.documentId(), c.documentTitle(),
+                    c.content(), c.pageStart(), c.pageEnd(), c.score()));
+            if (idx > Math.max(topK * 2, 8)) {
+                break;
+            }
+        }
+        return merged;
+    }
+
+    private List<String> extractKeywords(String question) {
+        String normalized = normalizeForMatch(question);
+        if (normalized.isBlank()) {
+            return List.of();
+        }
+        LinkedHashSet<String> keywords = new LinkedHashSet<>();
+        for (String token : normalized.split("\\s+")) {
+            if (token.length() >= 3 && !STOP_WORDS.contains(token)) {
+                keywords.add(token);
+            }
+        }
+        return new ArrayList<>(keywords);
+    }
+
+    /**
+     * Score chunks of the scoped documents by keyword occurrence and return the best ones.
+     */
+    private List<PromptBuilder.RetrievedChunk> lexicalSearch(
+            List<String> keywords, List<Document> scopeDocs, int limit) {
+        if (scopeDocs == null || scopeDocs.isEmpty()) {
+            return List.of();
+        }
+
+        record Scored(DocumentChunk chunk, Document doc, int score) {
+        }
+        List<Scored> scored = new ArrayList<>();
+
+        for (Document doc : scopeDocs) {
+            List<DocumentChunk> chunks = chunkRepository.findAllByDocument_IdOrderByChunkIndexAsc(doc.getId());
+            for (DocumentChunk chunk : chunks) {
+                if (chunk.getContent() == null || chunk.getContent().isBlank()) {
+                    continue;
+                }
+                String haystack = normalizeForMatch(chunk.getContent());
+                int score = 0;
+                for (String kw : keywords) {
+                    int from = 0;
+                    while ((from = haystack.indexOf(kw, from)) >= 0) {
+                        score++;
+                        from += kw.length();
+                    }
+                }
+                if (score > 0) {
+                    scored.add(new Scored(chunk, doc, score));
+                }
+            }
+        }
+
+        scored.sort(Comparator.comparingInt(Scored::score).reversed());
+
+        List<PromptBuilder.RetrievedChunk> result = new ArrayList<>();
+        int idx = 1;
+        for (Scored s : scored) {
+            result.add(new PromptBuilder.RetrievedChunk(
+                    idx++, s.chunk().getId().toString(), s.doc().getId().toString(),
+                    s.doc().getTitle(), s.chunk().getContent(),
+                    s.chunk().getPageStart(), s.chunk().getPageEnd(), null));
+            if (idx > limit) {
+                break;
             }
         }
         return result;
