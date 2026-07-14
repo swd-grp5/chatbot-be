@@ -15,6 +15,10 @@ public class DocumentChunkingService {
     private static final int DEFAULT_CHUNK_SIZE = 1200;
     private static final int DEFAULT_CHUNK_OVERLAP = 200;
 
+    // Khi vượt quá chunkSize, cho phép "co giãn" thêm tối đa bao nhiêu ký tự để
+    // tìm được điểm kết thúc câu gần nhất trước khi buộc phải cắt cứng.
+    private static final int BOUNDARY_SEARCH_WINDOW = 200;
+
     public List<DocumentChunk> chunk(Document document, String content) {
         List<DocumentChunk> chunks = new ArrayList<>();
         if (content == null || content.isBlank()) {
@@ -27,7 +31,9 @@ public class DocumentChunkingService {
         int start = 0;
 
         while (start < content.length()) {
-            int end = Math.min(content.length(), start + chunkSize);
+            int hardEnd = Math.min(content.length(), start + chunkSize);
+            int end = findChunkEnd(content, start, hardEnd);
+
             String chunkContent = content.substring(start, end).trim();
             if (!chunkContent.isEmpty()) {
                 chunks.add(DocumentChunk.builder()
@@ -49,10 +55,84 @@ public class DocumentChunkingService {
             if (end >= content.length()) {
                 break;
             }
-            start = Math.max(end - overlap, start + 1);
+            start = nextStart(content, start, end, overlap);
         }
 
         return chunks;
+    }
+
+    /**
+     * Tìm điểm cắt "đẹp" cho chunk trong khoảng [start, hardEnd).
+     * Ưu tiên theo thứ tự: cuối đoạn văn (xuống dòng) -> cuối câu (. ! ? …)
+     * -> khoảng trắng (không cắt giữa chữ). Nếu không tìm được thì cắt cứng.
+     */
+    private int findChunkEnd(String content, int start, int hardEnd) {
+        if (hardEnd >= content.length()) {
+            return content.length();
+        }
+
+        // Cho phép nới ra một chút để không bỏ lỡ điểm kết câu ngay sau hardEnd.
+        int searchEnd = Math.min(content.length(), hardEnd + BOUNDARY_SEARCH_WINDOW);
+        int minEnd = start + (hardEnd - start) / 2; // tránh chunk quá ngắn
+
+        // 1. Ưu tiên ranh giới đoạn văn (dòng trống / xuống dòng).
+        int paragraphBreak = lastBoundary(content, minEnd, searchEnd, this::isParagraphBreak);
+        if (paragraphBreak > start) {
+            return paragraphBreak;
+        }
+
+        // 2. Ranh giới cuối câu.
+        int sentenceBreak = lastBoundary(content, minEnd, searchEnd, this::isSentenceEnd);
+        if (sentenceBreak > start) {
+            return sentenceBreak;
+        }
+
+        // 3. Ranh giới khoảng trắng (không cắt giữa từ).
+        int wordBreak = lastBoundary(content, minEnd, hardEnd, ch -> Character.isWhitespace(ch));
+        if (wordBreak > start) {
+            return wordBreak;
+        }
+
+        // 4. Không có ranh giới hợp lý -> cắt cứng.
+        return hardEnd;
+    }
+
+    /** Trả về vị trí (loại trừ) ngay sau ký tự ranh giới cuối cùng trong [from, to). */
+    private int lastBoundary(String content, int from, int to, BoundaryMatcher matcher) {
+        for (int i = to - 1; i >= from; i--) {
+            if (matcher.matches(content.charAt(i))) {
+                return i + 1;
+            }
+        }
+        return -1;
+    }
+
+    private boolean isSentenceEnd(char ch) {
+        return ch == '.' || ch == '!' || ch == '?' || ch == '\u2026' // …
+                || ch == '\u3002' || ch == '\uFF01' || ch == '\uFF1F'; // 。！？ (full-width)
+    }
+
+    private boolean isParagraphBreak(char ch) {
+        return ch == '\n' || ch == '\r';
+    }
+
+    /**
+     * Tính điểm bắt đầu chunk kế tiếp, lùi lại theo overlap nhưng căn về đầu câu
+     * gần nhất để phần overlap không bắt đầu giữa chừng một câu.
+     */
+    private int nextStart(String content, int start, int end, int overlap) {
+        int target = Math.max(end - overlap, start + 1);
+        // Lùi tiếp một chút để bắt đầu ngay sau một ranh giới câu nếu có.
+        int boundary = lastBoundary(content, start + 1, target, ch -> isSentenceEnd(ch) || isParagraphBreak(ch));
+        if (boundary > start && boundary < end) {
+            return boundary;
+        }
+        return target;
+    }
+
+    @FunctionalInterface
+    private interface BoundaryMatcher {
+        boolean matches(char ch);
     }
 
     private int estimateTokenCount(String text) {
