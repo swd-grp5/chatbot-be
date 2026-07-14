@@ -130,7 +130,7 @@ public class QuizAiGenerationService {
 
         // Charge only after a parseable quiz is produced (failed parses used to burn credits on retries).
         creditService.consume(lecturer, "QUIZ_GENERATE");
-        return quizService.saveQuiz(createRequest, userEmail, true);
+        return quizService.saveQuiz(createRequest, userEmail, true, request.getAllowRetake());
     }
 
     /**

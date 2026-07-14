@@ -69,6 +69,11 @@ public class Quiz {
     @Builder.Default
     private Boolean showScore = true;
 
+    /** Cho phép sinh viên làm lại sau khi đã nộp. */
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean allowRetake = false;
+
     /** Số câu mỗi đề rút ra từ pool. Null = dùng toàn bộ pool. */
     private Integer questionsPerVariant;
 

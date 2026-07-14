@@ -39,4 +39,7 @@ public class QuizGenerateRequest {
     private Integer timeLimitMinutes;
 
     private List<UUID> documentIds;
+
+    /** true = sinh viên có thể làm lại sau khi đã nộp. */
+    private Boolean allowRetake = false;
 }

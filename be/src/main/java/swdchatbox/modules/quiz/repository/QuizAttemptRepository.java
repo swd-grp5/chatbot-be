@@ -15,4 +15,11 @@ public interface QuizAttemptRepository extends JpaRepository<QuizAttempt, UUID> 
 
     @EntityGraph(attributePaths = {"quiz", "answers", "answers.question", "answers.question.questionType"})
     Optional<QuizAttempt> findByIdAndStudent_Id(UUID attemptId, UUID studentId);
+
+    @EntityGraph(attributePaths = {"quiz", "student", "variant"})
+    List<QuizAttempt> findAllByQuiz_IdOrderBySubmittedAtDesc(UUID quizId);
+
+    boolean existsByQuiz_Id(UUID quizId);
+
+    boolean existsByQuiz_IdAndStudent_Id(UUID quizId, UUID studentId);
 }

@@ -14,8 +14,10 @@ import org.springframework.web.bind.annotation.*;
 import swdchatbox.modules.quiz.dto.request.QuizAssembleRequest;
 import swdchatbox.modules.quiz.dto.request.QuizFilterRequest;
 import swdchatbox.modules.quiz.dto.request.QuizGenerateRequest;
+import swdchatbox.modules.quiz.dto.request.QuizSettingsRequest;
 import swdchatbox.modules.quiz.dto.request.QuizSubmitRequest;
 import swdchatbox.modules.quiz.dto.request.QuizUpdateRequest;
+import swdchatbox.modules.quiz.dto.response.LecturerQuizAttemptResponse;
 import swdchatbox.modules.quiz.dto.response.QuizAttemptResponse;
 import swdchatbox.modules.quiz.dto.response.QuizResponse;
 import swdchatbox.modules.quiz.dto.response.QuizStartResponse;
@@ -116,6 +118,16 @@ public class QuizController {
         return ResponseEntity.ok(quizService.toggleActive(id, email(authentication)));
     }
 
+    @Operation(summary = "Cập nhật cài đặt quiz", description = "Ẩn/hiện điểm, cho phép làm lại.")
+    @PatchMapping("/{id}/settings")
+    public ResponseEntity<QuizResponse> updateSettings(
+            @PathVariable UUID id,
+            @Valid @RequestBody QuizSettingsRequest request,
+            Authentication authentication
+    ) {
+        return ResponseEntity.ok(quizService.updateSettings(id, request, email(authentication)));
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> delete(@PathVariable UUID id, Authentication authentication) {
         quizService.delete(id, email(authentication));
@@ -131,6 +143,15 @@ public class QuizController {
     @GetMapping("/{id}/attempts")
     public ResponseEntity<List<QuizAttemptResponse>> myAttempts(@PathVariable UUID id, Authentication authentication) {
         return ResponseEntity.ok(quizService.getMyAttempts(id, email(authentication)));
+    }
+
+    @Operation(summary = "Giảng viên xem danh sách người đã nộp và điểm")
+    @GetMapping("/{id}/submissions")
+    public ResponseEntity<List<LecturerQuizAttemptResponse>> submissions(
+            @PathVariable UUID id,
+            Authentication authentication
+    ) {
+        return ResponseEntity.ok(quizService.getLecturerAttempts(id, email(authentication)));
     }
 
     @GetMapping("/{id}/attempts/{attemptId}")

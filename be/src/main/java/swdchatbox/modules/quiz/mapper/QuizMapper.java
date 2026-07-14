@@ -21,10 +21,11 @@ public final class QuizMapper {
                 .status(quiz.getStatus())
                 .timeLimitMinutes(quiz.getTimeLimitMinutes())
                 .totalPoints(sumPoints(quiz))
-                .questionCount(quiz.getQuestions() != null ? quiz.getQuestions().size() : 0)
+                .questionCount(uniqueQuestionCount(quiz))
                 .active(quiz.getActive())
                 .aiGenerated(quiz.getAiGenerated())
                 .showScore(quiz.getShowScore())
+                .allowRetake(quiz.getAllowRetake())
                 .variantCount(quiz.getVariantCount())
                 .publishedAt(quiz.getPublishedAt())
                 .createdAt(quiz.getCreatedAt())
@@ -49,12 +50,13 @@ public final class QuizMapper {
                 .status(quiz.getStatus())
                 .timeLimitMinutes(quiz.getTimeLimitMinutes())
                 .totalPoints(sumPoints(quiz))
-                .questionCount(quiz.getQuestions() != null ? quiz.getQuestions().size() : 0)
+                .questionCount(uniqueQuestionCount(quiz))
                 .active(quiz.getActive())
                 .aiGenerated(quiz.getAiGenerated())
                 .shuffleQuestions(quiz.getShuffleQuestions())
                 .shuffleOptions(quiz.getShuffleOptions())
                 .showScore(quiz.getShowScore())
+                .allowRetake(quiz.getAllowRetake())
                 .questionsPerVariant(quiz.getQuestionsPerVariant())
                 .variantCount(quiz.getVariantCount())
                 .publishedAt(quiz.getPublishedAt())
@@ -109,7 +111,36 @@ public final class QuizMapper {
 
     private static List<QuizQuestionResponse> toQuestions(List<QuizQuestion> questions, boolean includeAnswers) {
         if (questions == null || questions.isEmpty()) return List.of();
-        return questions.stream().map(q -> toQuestion(q, includeAnswers)).toList();
+        java.util.Map<java.util.UUID, QuizQuestion> unique = new java.util.LinkedHashMap<>();
+        for (QuizQuestion q : questions) {
+            if (q != null && q.getId() != null) {
+                unique.putIfAbsent(q.getId(), q);
+            }
+        }
+        return unique.values().stream().map(q -> toQuestion(q, includeAnswers)).toList();
+    }
+
+    private static double sumPoints(Quiz quiz) {
+        return uniqueQuestions(quiz).stream()
+                .mapToDouble(q -> q.getPoints() != null ? q.getPoints() : 0.0)
+                .sum();
+    }
+
+    private static int uniqueQuestionCount(Quiz quiz) {
+        return uniqueQuestions(quiz).size();
+    }
+
+    private static java.util.Collection<QuizQuestion> uniqueQuestions(Quiz quiz) {
+        if (quiz.getQuestions() == null || quiz.getQuestions().isEmpty()) {
+            return java.util.List.of();
+        }
+        java.util.Map<java.util.UUID, QuizQuestion> unique = new java.util.LinkedHashMap<>();
+        for (QuizQuestion q : quiz.getQuestions()) {
+            if (q != null && q.getId() != null) {
+                unique.putIfAbsent(q.getId(), q);
+            }
+        }
+        return unique.values();
     }
 
     private static QuizQuestionResponse toQuestion(QuizQuestion question, boolean includeAnswers) {
@@ -169,12 +200,5 @@ public final class QuizMapper {
                 .sortOrder(sortOrder)
                 .options(options)
                 .build();
-    }
-
-    private static double sumPoints(Quiz quiz) {
-        if (quiz.getQuestions() == null) return 0.0;
-        return quiz.getQuestions().stream()
-                .mapToDouble(q -> q.getPoints() != null ? q.getPoints() : 0.0)
-                .sum();
     }
 }

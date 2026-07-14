@@ -22,6 +22,7 @@ public class QuizSummaryResponse {
     private Boolean active;
     private Boolean aiGenerated;
     private Boolean showScore;
+    private Boolean allowRetake;
     private Integer variantCount;
     private LocalDateTime publishedAt;
     private LocalDateTime createdAt;

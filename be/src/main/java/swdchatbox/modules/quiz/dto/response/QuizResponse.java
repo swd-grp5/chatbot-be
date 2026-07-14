@@ -28,6 +28,7 @@ public class QuizResponse {
     private Boolean shuffleQuestions;
     private Boolean shuffleOptions;
     private Boolean showScore;
+    private Boolean allowRetake;
     private Integer questionsPerVariant;
     private Integer variantCount;
     private LocalDateTime publishedAt;

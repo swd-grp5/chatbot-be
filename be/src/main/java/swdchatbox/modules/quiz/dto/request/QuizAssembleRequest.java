@@ -54,6 +54,9 @@ public class QuizAssembleRequest {
     /** true = sinh viên thấy điểm sau khi nộp. */
     private Boolean showScore = true;
 
+    /** true = sinh viên có thể làm lại sau khi đã nộp. */
+    private Boolean allowRetake = false;
+
     /** EVEN = chia đều totalPoints; CUSTOM = dùng customPoints từng câu. */
     private PointsDistributionMode pointsMode = PointsDistributionMode.EVEN;
 
