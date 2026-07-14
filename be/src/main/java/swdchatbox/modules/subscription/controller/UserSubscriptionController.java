@@ -24,10 +24,16 @@ public class UserSubscriptionController {
 
     private final UserSubscriptionService subscriptionService;
 
-    @Operation(summary = "Lấy thông tin gói cước hiện tại của tôi")
+    @Operation(summary = "Lấy thông tin gói cước hiện tại của tôi (bao gồm credits và reset time)")
     @GetMapping("/current")
-    public ResponseEntity<SubscriptionPlan> getCurrentPlan(Authentication authentication) {
-        return ResponseEntity.ok(subscriptionService.getCurrentUserPlan(authentication.getName()));
+    public ResponseEntity<swdchatbox.modules.subscription.dto.response.CurrentUserSubscriptionResponse> getCurrentPlan(Authentication authentication) {
+        return ResponseEntity.ok(subscriptionService.getCurrentUserSubscriptionDetails(authentication.getName()));
+    }
+
+    @Operation(summary = "Lấy danh sách các gói cước đang hoạt động dành cho Student")
+    @GetMapping("/plans")
+    public ResponseEntity<List<SubscriptionPlan>> getActivePlans() {
+        return ResponseEntity.ok(subscriptionService.getActivePlans());
     }
 
     @Operation(summary = "Đăng ký gói cước VIP hệ thống")

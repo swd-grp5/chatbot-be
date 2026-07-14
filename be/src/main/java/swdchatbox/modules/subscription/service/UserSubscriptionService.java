@@ -18,6 +18,7 @@ import swdchatbox.modules.subscription.repository.UserSubscriptionRepository;
 import swdchatbox.modules.role.RoleCodes;
 import swdchatbox.modules.user.entity.User;
 import swdchatbox.modules.user.repository.UserRepository;
+import swdchatbox.modules.wallet.entity.Wallet;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -32,6 +33,9 @@ public class UserSubscriptionService {
     private final SubscriptionPlanRepository subscriptionPlanRepository;
     private final UserRepository userRepository;
     private final InvoiceService invoiceService;
+    private final swdchatbox.modules.wallet.service.WalletService walletService;
+    private final SubscriptionPurchaseService subscriptionPurchaseService;
+    private final swdchatbox.modules.credit.service.CreditService creditService;
 
     @Transactional
     public UserSubscriptionResponse subscribe(UUID planId, String email) {
@@ -41,6 +45,14 @@ public class UserSubscriptionService {
 
         if (!Boolean.TRUE.equals(plan.getActive())) {
             throw new BadRequestException("This subscription plan is currently inactive");
+        }
+
+        // Check wallet balance if paid plan
+        if (plan.getPrice() != null && plan.getPrice().compareTo(BigDecimal.ZERO) > 0) {
+            Wallet wallet = walletService.getOrCreateWallet(email);
+            if (wallet.getBalance().compareTo(plan.getPrice()) < 0) {
+                throw new BadRequestException("Số dư ví không đủ để mua gói cước này");
+            }
         }
 
         UserSubscription activeSub = subscriptionRepository
@@ -56,19 +68,28 @@ public class UserSubscriptionService {
             subscriptionRepository.save(activeSub);
         }
 
-        LocalDateTime subscribedAt = LocalDateTime.now();
-        LocalDateTime expiresAt = subscribedAt.plusMonths(plan.getDurationInMonths());
+        UserSubscription saved;
+        if (plan.getPrice() == null || plan.getPrice().compareTo(BigDecimal.ZERO) == 0) {
+            LocalDateTime subscribedAt = LocalDateTime.now();
+            LocalDateTime expiresAt = calculateExpirationDate(subscribedAt, plan.getDurationValue(), plan.getDurationUnit());
 
-        UserSubscription subscription = UserSubscription.builder()
-                .user(user)
-                .subscriptionPlan(plan)
-                .active(true)
-                .subscribedAt(subscribedAt)
-                .expiresAt(expiresAt)
-                .build();
+            UserSubscription subscription = UserSubscription.builder()
+                    .user(user)
+                    .subscriptionPlan(plan)
+                    .active(true)
+                    .subscribedAt(subscribedAt)
+                    .expiresAt(expiresAt)
+                    .build();
 
-        UserSubscription saved = subscriptionRepository.save(subscription);
-        invoiceService.createSubscriptionInvoice(saved);
+            saved = subscriptionRepository.save(subscription);
+            swdchatbox.modules.invoice.entity.Invoice invoice = invoiceService.createSubscriptionInvoice(saved, BigDecimal.ZERO);
+            invoiceService.markPaid(invoice);
+        } else {
+            saved = subscriptionPurchaseService.purchase(planId, email, plan.getPrice());
+        }
+
+        creditService.grantForPlan(user, plan);
+
         return toResponse(saved);
     }
 
@@ -83,6 +104,11 @@ public class UserSubscriptionService {
         subscription.setActive(false);
         subscription.setUnsubscribedAt(LocalDateTime.now());
         subscriptionRepository.save(subscription);
+
+        // Downgrade back to Free plan & refill Free credit
+        SubscriptionPlan freePlan = subscriptionPlanRepository.findByNameIgnoreCase("Free")
+                .orElseThrow(() -> new ResourceNotFoundException("Default Free subscription plan not found"));
+        creditService.grantForPlan(user, freePlan);
     }
 
     @Transactional(readOnly = true)
@@ -95,13 +121,33 @@ public class UserSubscriptionService {
                         .orElseGet(() -> SubscriptionPlan.builder()
                                 .name("Free")
                                 .price(BigDecimal.ZERO)
-                                .dailyQuestionLimit(10)
-                                .durationInMonths(999)
+                                .creditAmount(100)
+                                .resetPeriod(swdchatbox.modules.subscription.enums.ResetPeriod.DAILY)
+                                .durationValue(999)
+                                .durationUnit(swdchatbox.modules.subscription.enums.DurationUnit.MONTH)
                                 .description("Gói miễn phí mặc định")
                                 .active(true)
                                 .build()
                         )
                 );
+    }
+
+    @Transactional
+    public swdchatbox.modules.subscription.dto.response.CurrentUserSubscriptionResponse getCurrentUserSubscriptionDetails(String email) {
+        User user = findEligibleUserByEmail(email);
+        SubscriptionPlan plan = getCurrentUserPlan(email);
+        swdchatbox.modules.credit.entity.UserCreditAccount account = creditService.getOrCreateAccount(user);
+
+        return swdchatbox.modules.subscription.dto.response.CurrentUserSubscriptionResponse.builder()
+                .plan(plan)
+                .remainingCredits(account.getRemainingCredits())
+                .nextResetAt(account.getNextResetAt())
+                .build();
+    }
+
+    @Transactional(readOnly = true)
+    public List<SubscriptionPlan> getActivePlans() {
+        return subscriptionPlanRepository.findAllByActiveTrue();
     }
 
     @Transactional(readOnly = true)
@@ -129,8 +175,10 @@ public class UserSubscriptionService {
 
         existingPlan.setName(updatedPlan.getName());
         existingPlan.setPrice(updatedPlan.getPrice());
-        existingPlan.setDailyQuestionLimit(updatedPlan.getDailyQuestionLimit());
-        existingPlan.setDurationInMonths(updatedPlan.getDurationInMonths());
+        existingPlan.setCreditAmount(updatedPlan.getCreditAmount());
+        existingPlan.setResetPeriod(updatedPlan.getResetPeriod());
+        existingPlan.setDurationValue(updatedPlan.getDurationValue());
+        existingPlan.setDurationUnit(updatedPlan.getDurationUnit());
         existingPlan.setDescription(updatedPlan.getDescription());
         existingPlan.setActive(updatedPlan.getActive());
 
@@ -157,11 +205,19 @@ public class UserSubscriptionService {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found"));
 
-        if (!RoleCodes.STUDENT.equals(user.getRole().getCode())) {
+        if (!swdchatbox.modules.role.RoleCodes.STUDENT.equals(user.getRole().getCode())) {
             throw new BadRequestException("Only student accounts can use subscriptions");
         }
 
         return user;
+    }
+
+    private LocalDateTime calculateExpirationDate(LocalDateTime subscribedAt, int durationValue, swdchatbox.modules.subscription.enums.DurationUnit durationUnit) {
+        if (durationUnit == swdchatbox.modules.subscription.enums.DurationUnit.DAY) {
+            return subscribedAt.plusDays(durationValue);
+        } else {
+            return subscribedAt.plusMonths(durationValue);
+        }
     }
 
     private UserSubscriptionResponse toResponse(UserSubscription subscription) {
@@ -169,7 +225,6 @@ public class UserSubscriptionService {
                 .id(subscription.getId())
                 .planId(subscription.getSubscriptionPlan().getId())
                 .planName(subscription.getSubscriptionPlan().getName())
-                .dailyQuestionLimit(subscription.getSubscriptionPlan().getDailyQuestionLimit())
                 .active(subscription.getActive())
                 .subscribedAt(subscription.getSubscribedAt())
                 .expiresAt(subscription.getExpiresAt())

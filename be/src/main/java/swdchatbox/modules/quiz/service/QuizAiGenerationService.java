@@ -54,11 +54,13 @@ public class QuizAiGenerationService {
     private final QuizService quizService;
     private final ModelSettingService modelSettingService;
     private final ObjectMapper objectMapper;
+    private final swdchatbox.modules.credit.service.CreditService creditService;
 
     public QuizResponse generate(QuizGenerateRequest request, String userEmail) {
         validateGenerateRequest(request);
 
         User lecturer = resolveUser(userEmail);
+        creditService.ensureEnough(lecturer, "QUIZ_GENERATE");
         subjectEnrollmentService.requireLecturerCanManageQuiz(lecturer, request.getSubjectId());
         Subject subject = subjectEnrollmentService.findActiveSubject(request.getSubjectId());
 
@@ -98,6 +100,8 @@ public class QuizAiGenerationService {
             log.error("AI quiz generation failed for subject {}", subject.getId(), e);
             throw new BadRequestException("AI failed to generate quiz. Please try again.");
         }
+
+        creditService.consume(lecturer, "QUIZ_GENERATE");
 
         if (llmResponse == null || llmResponse.getContent() == null || llmResponse.getContent().isBlank()) {
             throw new BadRequestException("AI returned empty quiz content. Please try again.");

@@ -67,6 +67,7 @@ public class ChatService {
     private final AiProperties aiProperties;
     private final ModelSettingService modelSettingService;
     private final ObjectMapper objectMapper;
+    private final swdchatbox.modules.credit.service.CreditService creditService;
 
     // ───────────────── Conversation CRUD ─────────────────
 
@@ -142,6 +143,7 @@ public class ChatService {
 
     @Transactional
     public ChatAnswerResponse sendMessage(UUID conversationId, SendMessageRequest request, User user) {
+        creditService.ensureEnough(user, "CHAT_QUESTION");
         ChatConversation conversation = findConversation(conversationId, user.getId());
         String userQuestion = request.getMessage();
 
@@ -209,6 +211,9 @@ public class ChatService {
             log.error("LLM generation failed", e);
             return buildErrorResponse(conversation, "Không thể tạo câu trả lời. Vui lòng thử lại.");
         }
+
+        // Consume credit since LLM generation succeeded!
+        creditService.consume(user, "CHAT_QUESTION");
 
         // 8. Save assistant message
         ChatMessage assistantMessage = ChatMessage.builder()

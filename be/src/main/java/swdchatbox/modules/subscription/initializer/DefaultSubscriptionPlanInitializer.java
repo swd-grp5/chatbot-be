@@ -6,6 +6,8 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import swdchatbox.modules.subscription.entity.SubscriptionPlan;
+import swdchatbox.modules.subscription.enums.DurationUnit;
+import swdchatbox.modules.subscription.enums.ResetPeriod;
 import swdchatbox.modules.subscription.repository.SubscriptionPlanRepository;
 
 import java.math.BigDecimal;
@@ -20,12 +22,14 @@ public class DefaultSubscriptionPlanInitializer implements CommandLineRunner {
     @Override
     @Transactional
     public void run(String... args) {
-        seedPlan("Free", BigDecimal.ZERO, 10, 999, "Gói miễn phí mặc định");
-        seedPlan("Basic", new BigDecimal("99000"), 50, 1, "Gói Basic - 50 câu hỏi/ngày");
-        seedPlan("Premium", new BigDecimal("199000"), 200, 1, "Gói Premium - 200 câu hỏi/ngày");
+        seedPlan("Free", BigDecimal.ZERO, 100, ResetPeriod.DAILY, 999, DurationUnit.MONTH, "Gói miễn phí mặc định");
+        seedPlan("Basic", new BigDecimal("99000"), 500, ResetPeriod.MONTHLY, 1, DurationUnit.MONTH, "Gói Basic - 500 credits/tháng");
+        seedPlan("Pro", new BigDecimal("199000"), 1500, ResetPeriod.MONTHLY, 1, DurationUnit.MONTH, "Gói Pro - 1500 credits/tháng");
+        seedPlan("Ultra", new BigDecimal("399000"), 5000, ResetPeriod.MONTHLY, 1, DurationUnit.MONTH, "Gói Ultra - 5000 credits/tháng");
     }
 
-    private void seedPlan(String name, BigDecimal price, int dailyQuestionLimit, int durationInMonths, String description) {
+    private void seedPlan(String name, BigDecimal price, int creditAmount, ResetPeriod resetPeriod, 
+                          int durationValue, DurationUnit durationUnit, String description) {
         if (subscriptionPlanRepository.findByNameIgnoreCase(name).isPresent()) {
             return;
         }
@@ -33,8 +37,10 @@ public class DefaultSubscriptionPlanInitializer implements CommandLineRunner {
         SubscriptionPlan plan = SubscriptionPlan.builder()
                 .name(name)
                 .price(price)
-                .dailyQuestionLimit(dailyQuestionLimit)
-                .durationInMonths(durationInMonths)
+                .creditAmount(creditAmount)
+                .resetPeriod(resetPeriod)
+                .durationValue(durationValue)
+                .durationUnit(durationUnit)
                 .description(description)
                 .active(true)
                 .build();
