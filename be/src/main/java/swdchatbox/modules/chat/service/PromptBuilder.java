@@ -18,16 +18,21 @@ import java.util.List;
 public class PromptBuilder {
 
     private static final String SYSTEM_PROMPT = """
-            Bạn là trợ lý học tập thông minh cho môn "Software Modeling and Design" \
-            (dựa trên textbook "Software Modeling and Design: UML, Use Cases, Patterns, and Software Architectures").
+            Bạn là trợ lý học tập chỉ trả lời dựa trên tài liệu người dùng đã gắn vào đoạn chat.
 
             ## Quy tắc BẮT BUỘC:
-            1. CHỈ trả lời dựa trên tài liệu được gắn vào đoạn chat và phần "TÀI LIỆU THAM KHẢO" bên dưới.
-            2. Nếu câu hỏi nằm NGOÀI phạm vi tài liệu đã gắn, trả lời: "Xin lỗi, câu hỏi này nằm ngoài phạm vi tài liệu đã chọn. Tôi chỉ có thể trả lời các câu hỏi liên quan đến nội dung đã được cung cấp."
-            3. LUÔN trích dẫn nguồn bằng format [1], [2], [3]... tương ứng với số thứ tự tài liệu tham khảo (trừ khi đang liệt kê danh sách tài liệu đã gắn).
-            4. Trả lời bằng tiếng Việt rõ ràng, mạch lạc. Nếu có thuật ngữ chuyên ngành, giữ nguyên tiếng Anh kèm giải thích.
-            5. Nếu có thể, đưa ra ví dụ minh họa từ tài liệu.
-            6. Trả lời đầy đủ nhưng súc tích, tập trung vào nội dung chính.
+            1. CHỈ dùng nội dung trong phần "TÀI LIỆU THAM KHẢO". Không dùng kiến thức ngoài, \
+            textbook, hay kiến thức nền của bạn.
+            2. Nếu phần tham khảo KHÔNG có thông tin đủ để trả lời, nói rõ: \
+            "Xin lỗi, trong các tài liệu đã chọn không có nội dung phù hợp để trả lời câu hỏi này." \
+            Không được bịa thêm định nghĩa, phân loại, hay ví dụ không có trong đoạn tham khảo.
+            3. Nếu người dùng yêu cầu tóm tắt / tổng quan một tài liệu, hãy tóm tắt dựa trên \
+            các đoạn tham khảo của đúng tài liệu đó; nêu các ý chính, không nói là thiếu nội dung \
+            chỉ vì câu hỏi chung chung.
+            4. Mỗi ý lấy từ tài liệu phải có trích dẫn dạng [n] kèm tên file, ví dụ: [1] Present Require.
+            5. Cuối câu trả lời, luôn có mục "Nguồn:" liệt kê từng [n] → tên tài liệu (và trang nếu có).
+            6. Trả lời bằng tiếng Việt rõ ràng, mạch lạc. Thuật ngữ chuyên ngành giữ nguyên tiếng Anh nếu tài liệu dùng vậy.
+            7. Không nêu tài liệu không nằm trong danh sách đã gắn / tham khảo.
             """;
 
     /**
@@ -63,7 +68,8 @@ public class PromptBuilder {
             messages.add(LlmMessage.system(
                     "KHÔNG TÌM THẤY đoạn nội dung liên quan trong các tài liệu đã gắn. " +
                             "Nếu người dùng hỏi bạn đang được cung cấp tài liệu gì, chỉ liệt kê đúng danh sách đã gắn ở trên. " +
-                            "Với câu hỏi nội dung khác, thông báo không tìm thấy đoạn phù hợp trong tài liệu đã chọn."));
+                            "Với câu hỏi nội dung khác, trả lời rằng không tìm thấy đoạn phù hợp trong tài liệu đã chọn. " +
+                            "Không được tự bịa nội dung."));
         }
 
         // 3. Conversation history (limit to last N messages)
@@ -108,13 +114,16 @@ public class PromptBuilder {
 
     private String buildContextPrompt(List<RetrievedChunk> chunks) {
         StringBuilder sb = new StringBuilder();
-        sb.append("## TÀI LIỆU THAM KHẢO:\n\n");
+        sb.append("## TÀI LIỆU THAM KHẢO:\n");
+        sb.append("Chỉ được dùng các đoạn dưới đây. Mỗi [n] là một nguồn; khi trích dẫn hãy viết [n] kèm tên file.\n\n");
 
         for (RetrievedChunk chunk : chunks) {
             sb.append("[").append(chunk.citationIndex()).append("] ");
 
-            if (chunk.documentTitle() != null) {
-                sb.append("**").append(chunk.documentTitle()).append("**");
+            if (chunk.documentTitle() != null && !chunk.documentTitle().isBlank()) {
+                sb.append(chunk.documentTitle());
+            } else {
+                sb.append("(không rõ tên file)");
             }
             if (chunk.pageStart() != null) {
                 sb.append(" (trang ").append(chunk.pageStart());

@@ -174,31 +174,68 @@ public class ChatService {
                     aiConfig.getChatModel());
         }
 
-        // 3. Vector search — find relevant document chunks (scoped to attached docs)
+        // 3–4. Title-aware retrieval (+ summary fallback for vague questions)
         List<UUID> selectedDocIds = parseDocumentIds(conversation.getSelectedDocumentIdsJson());
-        Map<String, Object> filter = buildSearchFilter(conversation, selectedDocIds);
-        log.info("[chat] step=vector-search conversationId={} selectedDocIds={} filter={}",
-                conversationId, selectedDocIds, filter);
-        List<VectorSearchResult> searchResults;
-        try {
-            searchResults = vectorStoreService.search(
-                    queryVector,
-                    aiConfig.getTopK(),
-                    filter);
-        } catch (Exception e) {
-            log.error(
-                    "[chat] step=vector-search conversationId={} provider={} embeddingModel={} topK={} error={}",
-                    conversationId,
-                    aiConfig.getProvider(),
-                    aiConfig.getEmbeddingModel(),
-                    aiConfig.getTopK(),
-                    e.getMessage(),
-                    e);
-            searchResults = List.of();
-        }
+        List<Document> attachedDocs = loadAttachedDocuments(selectedDocIds);
+        List<Document> titleMatchedDocs = matchDocumentsByTitle(userQuestion, attachedDocs);
+        boolean summaryIntent = isSummaryIntent(userQuestion);
 
-        // 4. Enrich search results with chunk data from DB
-        List<PromptBuilder.RetrievedChunk> retrievedChunks = enrichSearchResults(searchResults);
+        List<UUID> retrievalDocIds = !titleMatchedDocs.isEmpty()
+                ? titleMatchedDocs.stream().map(Document::getId).toList()
+                : selectedDocIds;
+        Map<String, Object> filter = buildSearchFilter(conversation, retrievalDocIds);
+
+        log.info(
+                "[chat] step=retrieve conversationId={} selectedDocIds={} titleMatched={} summaryIntent={} filter={}",
+                conversationId,
+                selectedDocIds,
+                titleMatchedDocs.stream().map(Document::getTitle).toList(),
+                summaryIntent,
+                filter);
+
+        List<PromptBuilder.RetrievedChunk> retrievedChunks;
+        List<Document> summaryTargets = resolveSummaryTargets(
+                userQuestion, titleMatchedDocs, attachedDocs, summaryIntent);
+        if (!summaryTargets.isEmpty()) {
+            // Vague / title-only questions → load representative chunks (skip weak semantic match)
+            retrievedChunks = loadRepresentativeChunks(summaryTargets, Math.max(aiConfig.getTopK() * 2, 8));
+            log.info("[chat] step=summary-fallback conversationId={} docs={} chunks={}",
+                    conversationId,
+                    summaryTargets.stream().map(Document::getTitle).toList(),
+                    retrievedChunks.size());
+        } else {
+            List<VectorSearchResult> searchResults;
+            try {
+                // Title-scoped questions: keep top-K even if scores are below default threshold
+                double threshold = !titleMatchedDocs.isEmpty()
+                        ? 0.0
+                        : aiProperties.getRetrievalScoreThreshold();
+                searchResults = vectorStoreService.search(
+                        queryVector,
+                        aiConfig.getTopK(),
+                        filter,
+                        threshold);
+            } catch (Exception e) {
+                log.error(
+                        "[chat] step=vector-search conversationId={} provider={} embeddingModel={} topK={} error={}",
+                        conversationId,
+                        aiConfig.getProvider(),
+                        aiConfig.getEmbeddingModel(),
+                        aiConfig.getTopK(),
+                        e.getMessage(),
+                        e);
+                searchResults = List.of();
+            }
+
+            retrievedChunks = enrichSearchResults(searchResults);
+
+            // If semantic search missed (common for title-only questions), fall back to doc chunks
+            if (retrievedChunks.isEmpty() && !titleMatchedDocs.isEmpty()) {
+                retrievedChunks = loadRepresentativeChunks(titleMatchedDocs, Math.max(aiConfig.getTopK() * 2, 8));
+                log.info("[chat] step=title-fallback conversationId={} chunks={}",
+                        conversationId, retrievedChunks.size());
+            }
+        }
 
         // 5. Load conversation history (lấy trực tiếp theo thứ tự tăng dần, bỏ message
         // vừa lưu)
@@ -244,11 +281,12 @@ public class ChatService {
         // Consume credit since LLM generation succeeded!
         creditService.consume(user, "CHAT_QUESTION");
 
-        // 8. Save assistant message
+        // 8. Save assistant message (append nguồn so FE luôn hiện tên file)
+        String answerContent = appendSourceFooter(llmResponse.getContent(), retrievedChunks);
         ChatMessage assistantMessage = ChatMessage.builder()
                 .conversation(conversation)
                 .role(MessageRole.ASSISTANT)
-                .content(llmResponse.getContent())
+                .content(answerContent)
                 .llmModel(llmResponse.getModel())
                 .promptTokens(llmResponse.getPromptTokens())
                 .completionTokens(llmResponse.getCompletionTokens())
@@ -308,6 +346,200 @@ public class ChatService {
         return filter;
     }
 
+    private List<Document> loadAttachedDocuments(List<UUID> documentIds) {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return List.of();
+        }
+        List<Document> docs = documentRepository.findAllById(documentIds);
+        Map<UUID, Document> byId = new HashMap<>();
+        for (Document doc : docs) {
+            byId.put(doc.getId(), doc);
+        }
+        List<Document> ordered = new ArrayList<>();
+        for (UUID id : documentIds) {
+            Document doc = byId.get(id);
+            if (doc != null) {
+                ordered.add(doc);
+            }
+        }
+        return ordered;
+    }
+
+    /**
+     * Match attached documents whose title appears in the user question
+     * (e.g. "Present Require tóm tắt"). Prefers longer title matches.
+     */
+    private List<Document> matchDocumentsByTitle(String question, List<Document> attachedDocs) {
+        if (question == null || question.isBlank() || attachedDocs == null || attachedDocs.isEmpty()) {
+            return List.of();
+        }
+        String normalizedQuestion = normalizeForMatch(question);
+        if (normalizedQuestion.isBlank()) {
+            return List.of();
+        }
+
+        List<Document> ranked = new ArrayList<>(attachedDocs);
+        ranked.sort(Comparator.comparingInt((Document d) -> normalizeForMatch(d.getTitle()).length()).reversed());
+
+        List<Document> matched = new ArrayList<>();
+        for (Document doc : ranked) {
+            String title = normalizeForMatch(doc.getTitle());
+            if (title.length() < 3) {
+                continue;
+            }
+            if (normalizedQuestion.contains(title) || fuzzyTitleMatch(normalizedQuestion, title)) {
+                matched.add(doc);
+            }
+        }
+        return matched;
+    }
+
+    private boolean fuzzyTitleMatch(String normalizedQuestion, String normalizedTitle) {
+        // Strip common prefixes like "[r]" so "[R] Present Require" still matches "present require"
+        String strippedTitle = normalizedTitle
+                .replaceAll("^\\[[^\\]]+]\\s*", "")
+                .trim();
+        if (strippedTitle.length() >= 3 && normalizedQuestion.contains(strippedTitle)) {
+            return true;
+        }
+
+        // Require most significant tokens (length >= 3) to appear in the question
+        String[] tokens = strippedTitle.split("\\s+");
+        int significant = 0;
+        int hits = 0;
+        for (String token : tokens) {
+            if (token.length() < 3) {
+                continue;
+            }
+            significant++;
+            if (normalizedQuestion.contains(token)) {
+                hits++;
+            }
+        }
+        return significant > 0 && hits == significant;
+    }
+
+    private boolean isSummaryIntent(String question) {
+        if (question == null || question.isBlank()) {
+            return false;
+        }
+        String q = normalizeForMatch(question);
+        return q.contains("tom tat")
+                || q.contains("summary")
+                || q.contains("summarize")
+                || q.contains("tong quan")
+                || q.contains("noi dung chinh")
+                || q.contains("gioi thieu")
+                || q.contains("overview");
+    }
+
+    /**
+     * Decide which docs to load for summary-style questions.
+     * - "Present Require tóm tắt" → that file only
+     * - "tóm tắt" / title-only mention → matched file, else all attached
+     */
+    private List<Document> resolveSummaryTargets(
+            String question,
+            List<Document> titleMatchedDocs,
+            List<Document> attachedDocs,
+            boolean summaryIntent) {
+        if (attachedDocs == null || attachedDocs.isEmpty()) {
+            return List.of();
+        }
+        String normalized = normalizeForMatch(question);
+        boolean titleOnly = !titleMatchedDocs.isEmpty() && looksLikeTitleOnlyQuestion(normalized);
+
+        if (!summaryIntent && !titleOnly) {
+            return List.of();
+        }
+        if (!titleMatchedDocs.isEmpty()) {
+            return titleMatchedDocs;
+        }
+        // Explicit summary with no title named → summarize all attached docs
+        return summaryIntent ? attachedDocs : List.of();
+    }
+
+    /**
+     * Short questions that mostly just name a document (e.g. "Present Require")
+     * are treated as summary/overview requests.
+     */
+    private boolean looksLikeTitleOnlyQuestion(String normalizedQuestion) {
+        String[] tokens = normalizedQuestion.split("\\s+");
+        return tokens.length > 0 && tokens.length <= 6
+                && !normalizedQuestion.contains("la gi")
+                && !normalizedQuestion.contains("nhu the nao")
+                && !normalizedQuestion.contains("bao nhieu")
+                && !normalizedQuestion.contains("o dau")
+                && !normalizedQuestion.contains("khi nao")
+                && !normalizedQuestion.contains("tai sao")
+                && !normalizedQuestion.contains("vi sao");
+    }
+
+    private String normalizeForMatch(String text) {
+        if (text == null) {
+            return "";
+        }
+        String normalized = java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")
+                .toLowerCase(Locale.ROOT)
+                .replace('_', ' ')
+                .replace('-', ' ');
+        normalized = normalized.replaceAll("[^a-z0-9\\s\\[\\]]", " ");
+        return normalized.trim().replaceAll("\\s+", " ");
+    }
+
+    /**
+     * Load evenly spaced chunks across matched documents (no embedding score).
+     * Used for summary / title-only questions where semantic similarity is weak.
+     */
+    private List<PromptBuilder.RetrievedChunk> loadRepresentativeChunks(List<Document> docs, int maxChunks) {
+        if (docs == null || docs.isEmpty() || maxChunks <= 0) {
+            return List.of();
+        }
+
+        int perDoc = Math.max(1, maxChunks / docs.size());
+        List<PromptBuilder.RetrievedChunk> result = new ArrayList<>();
+        int citationIndex = 1;
+
+        for (Document doc : docs) {
+            List<DocumentChunk> all = chunkRepository.findAllByDocument_IdOrderByChunkIndexAsc(doc.getId());
+            if (all.isEmpty()) {
+                log.warn("[chat] documentId={} title='{}' has no chunks — cannot summarize",
+                        doc.getId(), doc.getTitle());
+                continue;
+            }
+            List<DocumentChunk> sampled = sampleEvenly(all, perDoc);
+            for (DocumentChunk chunk : sampled) {
+                if (chunk.getContent() == null || chunk.getContent().isBlank()) {
+                    continue;
+                }
+                result.add(new PromptBuilder.RetrievedChunk(
+                        citationIndex++,
+                        chunk.getId().toString(),
+                        doc.getId().toString(),
+                        doc.getTitle(),
+                        chunk.getContent(),
+                        chunk.getPageStart(),
+                        chunk.getPageEnd(),
+                        1.0));
+            }
+        }
+        return result;
+    }
+
+    private List<DocumentChunk> sampleEvenly(List<DocumentChunk> chunks, int limit) {
+        if (chunks.size() <= limit) {
+            return chunks;
+        }
+        List<DocumentChunk> sampled = new ArrayList<>();
+        int n = chunks.size();
+        for (int i = 0; i < limit; i++) {
+            int idx = (int) Math.round(i * (n - 1) / (double) (limit - 1));
+            sampled.add(chunks.get(idx));
+        }
+        return sampled;
+    }
+
     private List<String> resolveDocumentTitles(List<UUID> documentIds) {
         if (documentIds == null || documentIds.isEmpty()) {
             return List.of();
@@ -326,6 +558,40 @@ public class ChatService {
             }
         }
         return titles;
+    }
+
+    /**
+     * Ensure the answer always ends with a clear file-level source list.
+     * Skips appending if the model already wrote a "Nguồn:" section.
+     */
+    private String appendSourceFooter(String content, List<PromptBuilder.RetrievedChunk> chunks) {
+        if (chunks == null || chunks.isEmpty()) {
+            return content;
+        }
+        String body = content == null ? "" : content.trim();
+        if (body.toLowerCase(Locale.ROOT).contains("nguồn:")) {
+            return body;
+        }
+
+        StringBuilder sb = new StringBuilder(body);
+        sb.append("\n\n---\n**Nguồn:**\n");
+        for (PromptBuilder.RetrievedChunk chunk : chunks) {
+            sb.append("[").append(chunk.citationIndex()).append("] ");
+            if (chunk.documentTitle() != null && !chunk.documentTitle().isBlank()) {
+                sb.append(chunk.documentTitle());
+            } else {
+                sb.append("(không rõ tên file)");
+            }
+            if (chunk.pageStart() != null) {
+                sb.append(" (trang ").append(chunk.pageStart());
+                if (chunk.pageEnd() != null && !chunk.pageEnd().equals(chunk.pageStart())) {
+                    sb.append("-").append(chunk.pageEnd());
+                }
+                sb.append(")");
+            }
+            sb.append("\n");
+        }
+        return sb.toString().trim();
     }
 
     /**
