@@ -31,6 +31,11 @@ public class QuizAttempt {
     @JoinColumn(name = "student_id", nullable = false)
     private User student;
 
+    /** Đề (variant) mà sinh viên đã làm, nếu quiz có chia đề. Có thể null. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "variant_id")
+    private QuizVariant variant;
+
     @Column(nullable = false)
     private Double totalScore;
 

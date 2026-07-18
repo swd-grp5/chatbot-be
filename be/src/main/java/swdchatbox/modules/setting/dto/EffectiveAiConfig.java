@@ -1,11 +1,9 @@
 package swdchatbox.modules.setting.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.Builder;
 import lombok.Getter;
 
-/**
- * Runtime AI config resolved from the active DB model setting (with env fallback).
- */
 @Getter
 @Builder
 public class EffectiveAiConfig {
@@ -17,6 +15,10 @@ public class EffectiveAiConfig {
     private final Integer maxTokens;
     private final Integer topK;
     private final boolean fromDatabase;
+    private final boolean apiKeyConfigured;
+
+    @JsonIgnore
+    private final String apiKey;
 
     public boolean isOpenAi() {
         return "openai".equalsIgnoreCase(provider);

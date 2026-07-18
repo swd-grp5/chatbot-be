@@ -3,6 +3,8 @@ package swdchatbox.modules.document.service;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import swdchatbox.shared.exception.ResourceNotFoundException;
@@ -33,7 +35,17 @@ public class DocumentIndexingService {
     private final EmbeddingService embeddingService;
     private final ObjectMapper objectMapper;
 
-    @Transactional
+    // Self reference so the @Transactional boundary on index() is honoured when
+    // invoked from processPendingJobs() (a direct self-call would bypass the proxy).
+    @Autowired
+    @Lazy
+    private DocumentIndexingService self;
+
+    /**
+     * NOTE: intentionally NOT @Transactional. Each job is claimed and processed in
+     * its own committed transaction so a claim is immediately visible to other runs
+     * and one job can never be indexed twice (which caused duplicate chunks).
+     */
     public void processPendingJobs() {
         List<DocumentIndexJob> jobs = documentIndexJobRepository
                 .findTop50ByStatusInAndNextRunAtLessThanEqualOrderByNextRunAtAsc(
@@ -41,9 +53,12 @@ public class DocumentIndexingService {
                         java.time.LocalDateTime.now());
 
         for (DocumentIndexJob job : jobs) {
+            // Skip jobs already picked up by a concurrent/overlapping run.
+            if (!documentIndexJobService.claim(job)) {
+                continue;
+            }
             try {
-                documentIndexJobService.markProcessing(job);
-                index(job.getDocument().getId());
+                self.index(job.getDocument().getId());
                 documentIndexJobService.markCompleted(job);
             } catch (Exception ex) {
                 documentIndexJobService.markRetry(job, ex);
@@ -80,8 +95,13 @@ public class DocumentIndexingService {
                 documentChunkRepository.saveAll(chunks);
                 log.info("Indexed {} chunks with embeddings for documentId={}", chunks.size(), documentId);
             } catch (Exception e) {
-                log.error("Failed to generate embeddings for documentId={}", documentId, e);
-                throw new RuntimeException("Embedding generation failed during indexing", e);
+                log.error(
+                        "[index] step=embedding.batch documentId={} chunkCount={} error={}",
+                        documentId,
+                        chunks.size(),
+                        e.getMessage(),
+                        e);
+                throw new RuntimeException("Embedding generation failed during indexing: " + e.getMessage(), e);
             }
         }
 

@@ -29,11 +29,19 @@ public class SubscriptionPlan {
     @Column(nullable = false, precision = 38, scale = 2) // Khớp với decimal(38, 2)
     private BigDecimal price;
 
-    @Column(name = "daily_question_limit", nullable = false)
-    private Integer dailyQuestionLimit;
+    @Column(name = "credit_amount", nullable = false)
+    private Integer creditAmount;
 
-    @Column(name = "duration_in_months", nullable = false)
-    private Integer durationInMonths;
+    @Enumerated(EnumType.STRING)
+    @Column(name = "reset_period", nullable = false, length = 20)
+    private swdchatbox.modules.subscription.enums.ResetPeriod resetPeriod;
+
+    @Column(name = "duration_value", nullable = false)
+    private Integer durationValue;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "duration_unit", nullable = false, length = 20)
+    private swdchatbox.modules.subscription.enums.DurationUnit durationUnit;
 
     @Column(columnDefinition = "TEXT") // Khớp với text null trong SQL của bạn
     private String description;

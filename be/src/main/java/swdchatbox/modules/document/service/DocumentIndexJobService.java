@@ -15,6 +15,7 @@ import swdchatbox.modules.document.repository.DocumentIndexJobRepository;
 import swdchatbox.modules.document.repository.DocumentRepository;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -57,14 +58,28 @@ public class DocumentIndexJobService {
         return DocumentIndexStatusMapper.toResponse(job);
     }
 
+    /**
+     * Atomically claims the job for processing in its own committed transaction.
+     * Returns {@code true} only if this caller won the claim; a job already picked
+     * up by another run (status no longer PENDING/RETRY) returns {@code false} so
+     * the caller can skip it. This prevents the same document being indexed twice
+     * (which produced duplicate chunks).
+     */
     @Transactional
-    public void markProcessing(DocumentIndexJob job) {
+    public boolean claim(DocumentIndexJob job) {
+        int updated = documentIndexJobRepository.claimForProcessing(
+                job.getId(),
+                DocumentIndexJobStatus.PROCESSING,
+                List.of(DocumentIndexJobStatus.PENDING, DocumentIndexJobStatus.RETRY));
+        if (updated == 0) {
+            return false;
+        }
         job.setStatus(DocumentIndexJobStatus.PROCESSING);
-        documentIndexJobRepository.save(job);
 
         Document document = job.getDocument();
         document.setStatus(DocumentStatus.PROCESSING);
         documentRepository.save(document);
+        return true;
     }
 
     @Transactional

@@ -34,6 +34,9 @@ public class QuizQuestionRequest {
     @Min(value = 0, message = "sortOrder must be >= 0")
     private Integer sortOrder;
 
+    /** Nếu câu hỏi lấy từ ngân hàng câu hỏi thì gắn id gốc để đồng bộ. Optional. */
+    private UUID bankQuestionId;
+
     /** Tài liệu nguồn của câu hỏi (AI tự điền, hoặc giảng viên giữ lại khi sửa). Optional. */
     private UUID sourceDocumentId;
 

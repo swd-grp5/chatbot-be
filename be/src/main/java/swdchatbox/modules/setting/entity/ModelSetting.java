@@ -22,13 +22,19 @@ public class ModelSetting {
     private UUID id;
 
     @Column(nullable = false, length = 50)
-    private String provider; // OPENAI, GEMINI, OLLAMA
+    private String provider;
 
     @Column(nullable = false, length = 100)
     private String chatModel;
 
     @Column(nullable = false, length = 100)
     private String embeddingModel;
+
+    @Column(columnDefinition = "TEXT")
+    private String encryptedApiKey;
+
+    @Column(length = 8)
+    private String apiKeyLastFour;
 
     private Double temperature;
 

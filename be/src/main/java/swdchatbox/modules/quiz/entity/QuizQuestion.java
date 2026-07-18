@@ -30,6 +30,11 @@ public class QuizQuestion {
     @JoinColumn(name = "question_type_id", nullable = false)
     private QuestionType questionType;
 
+    /** Câu hỏi gốc trong ngân hàng câu hỏi (nếu quiz được tạo/đồng bộ từ bank). Có thể null. */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "bank_question_id")
+    private BankQuestion bankQuestion;
+
     @Enumerated(EnumType.STRING)
     @Column(length = 20)
     private MultipleChoiceMode multipleChoiceMode;

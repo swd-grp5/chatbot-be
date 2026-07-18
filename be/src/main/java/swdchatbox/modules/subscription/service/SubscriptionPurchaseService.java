@@ -65,8 +65,12 @@ public class SubscriptionPurchaseService {
         subscription.setActive(true);
         subscription.setSubscribedAt(now);
 
-        if (plan.getDurationInMonths() != null) {
-            subscription.setExpiresAt(now.plusMonths(plan.getDurationInMonths()));
+        if (plan.getDurationValue() != null && plan.getDurationUnit() != null) {
+            if (plan.getDurationUnit() == swdchatbox.modules.subscription.enums.DurationUnit.DAY) {
+                subscription.setExpiresAt(now.plusDays(plan.getDurationValue()));
+            } else {
+                subscription.setExpiresAt(now.plusMonths(plan.getDurationValue()));
+            }
         }
 
         subscription.setUnsubscribedAt(null);

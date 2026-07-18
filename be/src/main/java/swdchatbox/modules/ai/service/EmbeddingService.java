@@ -7,35 +7,29 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
-import swdchatbox.modules.ai.config.AiProperties;
+import swdchatbox.modules.ai.util.AiApiErrorSupport;
 import swdchatbox.modules.setting.dto.EffectiveAiConfig;
 import swdchatbox.modules.setting.service.ModelSettingService;
+import swdchatbox.shared.exception.BadRequestException;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Service for generating text embeddings via Gemini or OpenAI API.
- * Provider/model are loaded from DB model_settings (admin-configurable).
- */
 @Slf4j
 @Service
 public class EmbeddingService {
 
-    private final AiProperties aiProperties;
     private final ModelSettingService modelSettingService;
     private final RestClient geminiRestClient;
     private final RestClient openaiRestClient;
     private final ObjectMapper objectMapper;
 
     public EmbeddingService(
-            AiProperties aiProperties,
             ModelSettingService modelSettingService,
             @Qualifier("geminiRestClient") RestClient geminiRestClient,
             @Qualifier("openaiRestClient") RestClient openaiRestClient,
             ObjectMapper objectMapper) {
-        this.aiProperties = aiProperties;
         this.modelSettingService = modelSettingService;
         this.geminiRestClient = geminiRestClient;
         this.openaiRestClient = openaiRestClient;
@@ -44,24 +38,25 @@ public class EmbeddingService {
 
     public List<Double> embed(String text) {
         EffectiveAiConfig config = modelSettingService.resolveEffectiveConfig();
+        requireApiKey(config);
         if (config.isOpenAi()) {
-            return embedWithOpenAI(text, config.getEmbeddingModel());
+            return embedWithOpenAI(text, config.getEmbeddingModel(), config.getApiKey());
         }
-        return embedWithGemini(text, config.getEmbeddingModel());
+        return embedWithGemini(text, config.getEmbeddingModel(), config.getApiKey());
     }
 
     public List<List<Double>> embedBatch(List<String> texts) {
         EffectiveAiConfig config = modelSettingService.resolveEffectiveConfig();
+        requireApiKey(config);
         if (config.isOpenAi()) {
-            return embedBatchWithOpenAI(texts, config.getEmbeddingModel());
+            return embedBatchWithOpenAI(texts, config.getEmbeddingModel(), config.getApiKey());
         }
-        return embedBatchWithGemini(texts, config.getEmbeddingModel());
+        return embedBatchWithGemini(texts, config.getEmbeddingModel(), config.getApiKey());
     }
 
-    // ──────────────────────── Gemini ────────────────────────
-
-    private List<Double> embedWithGemini(String text, String model) {
-        String url = "/v1beta/models/" + model + ":embedContent?key=" + aiProperties.getGeminiApiKey();
+    private List<Double> embedWithGemini(String text, String model, String apiKey) {
+        String endpoint = "/v1beta/models/" + model + ":embedContent";
+        String url = endpoint + "?key=" + apiKey;
 
         Map<String, Object> body = Map.of(
                 "model", "models/" + model,
@@ -83,13 +78,14 @@ public class EmbeddingService {
             }
             return embedding;
         } catch (Exception e) {
-            log.error("Gemini embedding failed for text: {}...", text.substring(0, Math.min(50, text.length())), e);
-            throw new RuntimeException("Embedding API call failed", e);
+            AiApiErrorSupport.logFailure(log, "embedding.single", "gemini", model, endpoint, e);
+            throw AiApiErrorSupport.wrap("embedding.single", "gemini", model, endpoint, e);
         }
     }
 
-    private List<List<Double>> embedBatchWithGemini(List<String> texts, String model) {
-        String url = "/v1beta/models/" + model + ":batchEmbedContents?key=" + aiProperties.getGeminiApiKey();
+    private List<List<Double>> embedBatchWithGemini(List<String> texts, String model, String apiKey) {
+        String endpoint = "/v1beta/models/" + model + ":batchEmbedContents";
+        String url = endpoint + "?key=" + apiKey;
 
         List<Map<String, Object>> requests = texts.stream()
                 .map(text -> Map.<String, Object>of(
@@ -120,26 +116,26 @@ public class EmbeddingService {
             }
             return result;
         } catch (Exception e) {
-            log.error("Gemini batch embedding failed for {} texts", texts.size(), e);
-            throw new RuntimeException("Batch embedding API call failed", e);
+            AiApiErrorSupport.logFailure(log, "embedding.batch(count=" + texts.size() + ")", "gemini", model, endpoint, e);
+            throw AiApiErrorSupport.wrap("embedding.batch(count=" + texts.size() + ")", "gemini", model, endpoint, e);
         }
     }
 
-    // ──────────────────────── OpenAI ────────────────────────
-
-    private List<Double> embedWithOpenAI(String text, String model) {
-        return embedBatchWithOpenAI(List.of(text), model).get(0);
+    private List<Double> embedWithOpenAI(String text, String model, String apiKey) {
+        return embedBatchWithOpenAI(List.of(text), model, apiKey).get(0);
     }
 
-    private List<List<Double>> embedBatchWithOpenAI(List<String> texts, String model) {
+    private List<List<Double>> embedBatchWithOpenAI(List<String> texts, String model, String apiKey) {
+        String endpoint = "/v1/embeddings";
         Map<String, Object> body = Map.of(
                 "model", model,
                 "input", texts);
 
         try {
             String response = openaiRestClient.post()
-                    .uri("/v1/embeddings")
+                    .uri(endpoint)
                     .contentType(MediaType.APPLICATION_JSON)
+                    .header("Authorization", "Bearer " + apiKey)
                     .body(body)
                     .retrieve()
                     .body(String.class);
@@ -157,8 +153,15 @@ public class EmbeddingService {
             }
             return result;
         } catch (Exception e) {
-            log.error("OpenAI batch embedding failed for {} texts", texts.size(), e);
-            throw new RuntimeException("Embedding API call failed", e);
+            AiApiErrorSupport.logFailure(log, "embedding.batch(count=" + texts.size() + ")", "openai", model, endpoint, e);
+            throw AiApiErrorSupport.wrap("embedding.batch(count=" + texts.size() + ")", "openai", model, endpoint, e);
+        }
+    }
+
+    private static void requireApiKey(EffectiveAiConfig config) {
+        if (config.getApiKey() == null || config.getApiKey().isBlank()) {
+            throw new BadRequestException(
+                    "AI API key is not configured. Admin can set it via /model-settings or env (GEMINI_API_KEY / OPENAI_API_KEY).");
         }
     }
 }

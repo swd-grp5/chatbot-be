@@ -14,7 +14,10 @@ public class CitationResponse {
     private UUID documentId;
     private String documentTitle;
     private UUID chunkId;
+    /** Full-ish excerpt for the sidebar "ĐOẠN TRÍCH". */
     private String quotedText;
+    /** Single line/sentence within quotedText for FE to bold/highlight on click. */
+    private String highlightText;
     private Integer pageStart;
     private Integer pageEnd;
     private Double score;

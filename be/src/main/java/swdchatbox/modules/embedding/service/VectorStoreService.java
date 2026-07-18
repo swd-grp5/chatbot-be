@@ -88,6 +88,18 @@ public class VectorStoreService {
      *                    {@code "documentIds"} (List&lt;String&gt;)
      */
     public List<VectorSearchResult> search(List<Double> queryVector, int topK, Map<String, Object> filter) {
+        return search(queryVector, topK, filter, aiProperties.getRetrievalScoreThreshold());
+    }
+
+    /**
+     * Similarity search with an explicit score threshold (use {@code 0.0} to keep top-K
+     * even when scores are low — useful for title-scoped / summary questions).
+     */
+    public List<VectorSearchResult> search(
+            List<Double> queryVector,
+            int topK,
+            Map<String, Object> filter,
+            double threshold) {
         try {
             // 1. Load candidate chunks from MySQL
             List<DocumentChunk> candidates = loadCandidates(filter);
@@ -96,7 +108,6 @@ public class VectorStoreService {
                 return List.of();
             }
 
-            double threshold = aiProperties.getRetrievalScoreThreshold();
             double[] qArr = toDoubleArray(queryVector);
 
             // 2. Compute cosine similarity for each candidate in-memory
@@ -125,8 +136,8 @@ public class VectorStoreService {
             results.sort(Comparator.comparingDouble(VectorSearchResult::getScore).reversed());
             List<VectorSearchResult> topResults = results.stream().limit(topK).collect(Collectors.toList());
 
-            log.debug("Vector search: candidates={} above-threshold={} topK={} returned={}",
-                    candidates.size(), results.size(), topK, topResults.size());
+            log.debug("Vector search: candidates={} above-threshold={} topK={} threshold={} returned={}",
+                    candidates.size(), results.size(), topK, threshold, topResults.size());
             return topResults;
 
         } catch (Exception e) {
@@ -184,8 +195,10 @@ public class VectorStoreService {
     // ─────────────────────────── Private helpers ───────────────────────────
 
     private List<DocumentChunk> loadCandidates(Map<String, Object> filter) {
+        // Refuse unscoped search — otherwise chat can pull chunks from unrelated documents.
         if (filter == null || filter.isEmpty()) {
-            return documentChunkRepository.findAllWithEmbedding();
+            log.warn("Vector search called with empty filter — returning no results (refusing global scan)");
+            return List.of();
         }
 
         // Single document filter
@@ -230,9 +243,9 @@ public class VectorStoreService {
             }
         }
 
-        // Unknown filter key — fall back to full scan
-        log.warn("Unknown filter keys {}, loading all embedded chunks", filter.keySet());
-        return documentChunkRepository.findAllWithEmbedding();
+        // Unknown filter key — do not fall back to full scan
+        log.warn("Unknown filter keys {}, returning no results", filter.keySet());
+        return List.of();
     }
 
     private Map<String, Object> buildMetadata(DocumentChunk chunk) {

@@ -22,6 +22,7 @@ import swdchatbox.modules.embedding.service.VectorStoreService;
 import swdchatbox.modules.enrollment.service.SubjectEnrollmentService;
 import swdchatbox.modules.quiz.QuestionTypeCodes;
 import swdchatbox.modules.quiz.dto.request.*;
+import swdchatbox.modules.quiz.dto.response.BankQuestionResponse;
 import swdchatbox.modules.quiz.dto.response.QuizResponse;
 import swdchatbox.modules.quiz.entity.QuestionType;
 import swdchatbox.modules.quiz.enums.MultipleChoiceMode;
@@ -41,6 +42,11 @@ import java.util.*;
 public class QuizAiGenerationService {
 
     private static final int MAX_CONTEXT_CHARS = 12_000;
+    /** ~450 output tokens per MC question (text + 4 options + short excerpt) + overhead. */
+    private static final int TOKENS_PER_QUESTION = 450;
+    private static final int TOKEN_OVERHEAD = 1_024;
+    private static final int MIN_OUTPUT_TOKENS = 4_096;
+    private static final int MAX_OUTPUT_TOKENS = 8_192;
     private static final String RETRIEVAL_QUERY = "key concepts definitions facts important topics for examination quiz";
 
     private final LlmService llmService;
@@ -52,13 +58,16 @@ public class QuizAiGenerationService {
     private final SubjectEnrollmentService subjectEnrollmentService;
     private final UserRepository userRepository;
     private final QuizService quizService;
+    private final BankQuestionService bankQuestionService;
     private final ModelSettingService modelSettingService;
     private final ObjectMapper objectMapper;
+    private final swdchatbox.modules.credit.service.CreditService creditService;
 
     public QuizResponse generate(QuizGenerateRequest request, String userEmail) {
         validateGenerateRequest(request);
 
         User lecturer = resolveUser(userEmail);
+        creditService.ensureEnough(lecturer, "QUIZ_GENERATE");
         subjectEnrollmentService.requireLecturerCanManageQuiz(lecturer, request.getSubjectId());
         Subject subject = subjectEnrollmentService.findActiveSubject(request.getSubjectId());
 
@@ -88,14 +97,23 @@ public class QuizAiGenerationService {
                 .orElseThrow(() -> new ResourceNotFoundException("Multiple choice question type not found"));
 
         String prompt = buildPrompt(subject, questionCount, totalPoints, distribution, context);
+        int maxTokens = resolveMaxOutputTokens(questionCount);
+        var aiConfig = modelSettingService.resolveEffectiveConfig();
         LlmResponse llmResponse;
         try {
             llmResponse = llmService.generate(List.of(
                     LlmMessage.builder().role("system").content(systemPrompt()).build(),
                     LlmMessage.builder().role("user").content(prompt).build()
-            ), 0.4, 4096);
+            ), 0.4, maxTokens);
         } catch (Exception e) {
-            log.error("AI quiz generation failed for subject {}", subject.getId(), e);
+            log.error(
+                    "[quiz] step=llm.generate subjectId={} provider={} chatModel={} maxTokens={} error={}",
+                    subject.getId(),
+                    aiConfig.getProvider(),
+                    aiConfig.getChatModel(),
+                    maxTokens,
+                    e.getMessage(),
+                    e);
             throw new BadRequestException("AI failed to generate quiz. Please try again.");
         }
 
@@ -110,7 +128,90 @@ public class QuizAiGenerationService {
             createRequest.setTimeLimitMinutes(request.getTimeLimitMinutes());
         }
 
-        return quizService.saveQuiz(createRequest, userEmail, true);
+        // Charge only after a parseable quiz is produced (failed parses used to burn credits on retries).
+        creditService.consume(lecturer, "QUIZ_GENERATE");
+        return quizService.saveQuiz(createRequest, userEmail, true, request.getAllowRetake());
+    }
+
+    /**
+     * AI sinh câu hỏi trắc nghiệm trực tiếp vào ngân hàng câu hỏi (không tạo quiz).
+     * Tái sử dụng cùng luồng RAG + prompt + parse như sinh quiz.
+     */
+    public List<BankQuestionResponse> generateIntoBank(BankQuestionGenerateRequest request, String userEmail) {
+        if (request == null || request.getSubjectId() == null) {
+            throw new BadRequestException("subjectId is required");
+        }
+        int questionCount = request.getQuestionCount() != null ? request.getQuestionCount() : 5;
+        if (questionCount < 1 || questionCount > 20) {
+            throw new BadRequestException("questionCount must be between 1 and 20");
+        }
+        if (request.getDocumentIds() != null) {
+            for (int i = 0; i < request.getDocumentIds().size(); i++) {
+                if (request.getDocumentIds().get(i) == null) {
+                    throw new BadRequestException("documentIds[" + i + "] must not be null");
+                }
+            }
+        }
+
+        User lecturer = resolveUser(userEmail);
+        creditService.ensureEnough(lecturer, "QUIZ_GENERATE");
+        subjectEnrollmentService.requireLecturerCanManageQuiz(lecturer, request.getSubjectId());
+        Subject subject = subjectEnrollmentService.findActiveSubject(request.getSubjectId());
+
+        List<DocSource> sources = buildContextSources(subject, request.getDocumentIds());
+        if (sources.isEmpty()) {
+            throw new BadRequestException("No document content available for this subject. Upload and index documents first.");
+        }
+
+        Map<Integer, Document> indexToDocument = new LinkedHashMap<>();
+        for (int i = 0; i < sources.size(); i++) {
+            indexToDocument.put(i + 1, sources.get(i).document());
+        }
+        String context = renderContext(sources);
+
+        QuestionType questionType = questionTypeRepository.findByCode(QuestionTypeCodes.MULTIPLE_CHOICE)
+                .orElseThrow(() -> new ResourceNotFoundException("Multiple choice question type not found"));
+
+        int totalPoints = 10;
+        PointsDistributionMode distribution = PointsDistributionMode.EVEN;
+        String prompt = buildPrompt(subject, questionCount, totalPoints, distribution, context);
+        int maxTokens = resolveMaxOutputTokens(questionCount);
+        var aiConfig = modelSettingService.resolveEffectiveConfig();
+        LlmResponse llmResponse;
+        try {
+            llmResponse = llmService.generate(List.of(
+                    LlmMessage.builder().role("system").content(systemPrompt()).build(),
+                    LlmMessage.builder().role("user").content(prompt).build()
+            ), 0.4, maxTokens);
+        } catch (Exception e) {
+            log.error(
+                    "[question-bank] step=llm.generate subjectId={} provider={} chatModel={} maxTokens={} error={}",
+                    subject.getId(),
+                    aiConfig.getProvider(),
+                    aiConfig.getChatModel(),
+                    maxTokens,
+                    e.getMessage(),
+                    e);
+            throw new BadRequestException("AI failed to generate questions. Please try again.");
+        }
+
+        if (llmResponse == null || llmResponse.getContent() == null || llmResponse.getContent().isBlank()) {
+            throw new BadRequestException("AI returned empty content. Please try again.");
+        }
+
+        QuizGenerateRequest proxy = new QuizGenerateRequest();
+        proxy.setSubjectId(subject.getId());
+        proxy.setQuestionCount(questionCount);
+        QuizCreateRequest parsed = parseAiResponse(
+                llmResponse.getContent(), proxy, questionType.getId(), indexToDocument, totalPoints, distribution);
+
+        creditService.consume(lecturer, "QUIZ_GENERATE");
+        return bankQuestionService.saveGenerated(subject, lecturer, parsed.getQuestions(), request.getDefaultPoints());
+    }
+
+    private static int resolveMaxOutputTokens(int questionCount) {
+        int estimated = questionCount * TOKENS_PER_QUESTION + TOKEN_OVERHEAD;
+        return Math.min(MAX_OUTPUT_TOKENS, Math.max(MIN_OUTPUT_TOKENS, estimated));
     }
 
     private void validateGenerateRequest(QuizGenerateRequest request) {
@@ -218,7 +319,14 @@ public class QuizAiGenerationService {
             }
             return sources;
         } catch (Exception e) {
-            log.warn("Vector retrieval for quiz generation failed, falling back to extracted text", e);
+            var aiConfig = modelSettingService.resolveEffectiveConfig();
+            log.warn(
+                    "[quiz] step=vector-retrieval subjectId={} provider={} embeddingModel={} error={} — falling back to extracted text",
+                    subjectId,
+                    aiConfig.getProvider(),
+                    aiConfig.getEmbeddingModel(),
+                    e.getMessage(),
+                    e);
             return List.of();
         }
     }
@@ -267,6 +375,7 @@ public class QuizAiGenerationService {
                 Return ONLY valid JSON (no markdown fences, no commentary).
                 Each question must be multiple choice with mode SINGLE (exactly 1 correct) or MULTIPLE (1+ correct).
                 Use Vietnamese for question and option text when the source material is in Vietnamese.
+                Keep questionText, optionText, and sourceExcerpt concise so the full JSON fits in one response.
                 """;
     }
 
@@ -310,10 +419,13 @@ public class QuizAiGenerationService {
                 }
 
                 Rules:
+                - Return exactly %d questions in the "questions" array
                 - SINGLE: exactly 1 option with isCorrect=true, at least 4 options
                 - MULTIPLE: at least 2 options with isCorrect=true, at least 4 options
+                - Keep optionText short (one line). Keep sourceExcerpt to at most 1-2 short sentences.
                 - Base questions ONLY on the provided material
                 - Each document below is labeled as [DOC n]. For every question set "sourceDocumentIndex" to the number n of the document it comes from, and "sourceExcerpt" to the exact quote from that document justifying the correct answer.
+                - Close every brace/bracket; the JSON must be complete and valid.
                 %s
                 MATERIAL:
                 %s
@@ -323,6 +435,7 @@ public class QuizAiGenerationService {
                 questionCount,
                 totalPoints,
                 distribution.name(),
+                questionCount,
                 pointsRule,
                 context);
     }
@@ -331,7 +444,11 @@ public class QuizAiGenerationService {
                                               Map<Integer, Document> indexToDocument, int totalPoints,
                                               PointsDistributionMode distribution) {
         try {
-            String json = stripMarkdownFence(raw);
+            String json = extractJson(raw);
+            if (!looksLikeCompleteJsonObject(json)) {
+                throw new BadRequestException(
+                        "AI response was truncated before the quiz JSON finished. Try fewer questions or try again.");
+            }
             JsonNode root = objectMapper.readTree(json);
 
             String title = request.getTitle() != null && !request.getTitle().isBlank()
@@ -458,7 +575,15 @@ public class QuizAiGenerationService {
         } catch (BadRequestException e) {
             throw e;
         } catch (Exception e) {
-            log.error("Failed to parse AI quiz JSON: {}", raw, e);
+            log.error("Failed to parse AI quiz JSON (len={}): {}",
+                    raw == null ? 0 : raw.length(),
+                    raw == null ? "null" : raw.substring(0, Math.min(800, raw.length())),
+                    e);
+            String trimmed = raw == null ? "" : raw.trim();
+            if (!trimmed.isEmpty() && !trimmed.endsWith("}") && !trimmed.endsWith("```")) {
+                throw new BadRequestException(
+                        "AI response was truncated before the quiz JSON finished. Try fewer questions or try again.");
+            }
             throw new BadRequestException("AI returned invalid quiz format. Please try again.");
         }
     }
@@ -551,6 +676,24 @@ public class QuizAiGenerationService {
             case "HARD" -> "HARD";
             default -> "MEDIUM";
         };
+    }
+
+    private String extractJson(String raw) {
+        String trimmed = stripMarkdownFence(raw);
+        int start = trimmed.indexOf('{');
+        int end = trimmed.lastIndexOf('}');
+        if (start >= 0 && end > start) {
+            return trimmed.substring(start, end + 1);
+        }
+        return trimmed;
+    }
+
+    private static boolean looksLikeCompleteJsonObject(String json) {
+        if (json == null) {
+            return false;
+        }
+        String trimmed = json.trim();
+        return trimmed.startsWith("{") && trimmed.endsWith("}");
     }
 
     private String stripMarkdownFence(String raw) {

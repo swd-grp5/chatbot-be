@@ -68,13 +68,13 @@ public class ChatController {
     }
 
     @PatchMapping("/conversations/{id}")
-    @Operation(summary = "Update conversation title")
+    @Operation(summary = "Update conversation title and/or selected documents")
     public ResponseEntity<ConversationResponse> updateConversation(
             @PathVariable UUID id,
             @Valid @RequestBody UpdateConversationRequest request,
             @AuthenticationPrincipal UserDetails userDetails) {
         User user = getCurrentUser(userDetails);
-        return ResponseEntity.ok(chatService.updateConversationTitle(id, user.getId(), request));
+        return ResponseEntity.ok(chatService.updateConversation(id, user.getId(), request));
     }
 
     @DeleteMapping("/conversations/{id}")
@@ -90,7 +90,8 @@ public class ChatController {
     // ───────────────── Messages ─────────────────
 
     @PostMapping("/conversations/{id}/messages")
-    @Operation(summary = "Send a message and get AI answer (RAG pipeline)")
+    @Operation(summary = "Send a message and get AI answer (RAG pipeline)",
+            description = "Returns both the saved user message (role=USER) and the AI reply (role=ASSISTANT).")
     public ResponseEntity<ChatAnswerResponse> sendMessage(
             @PathVariable UUID id,
             @Valid @RequestBody SendMessageRequest request,

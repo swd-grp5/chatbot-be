@@ -47,3 +47,6 @@ postgres-data
 
 # Docs
 docs/
+# Local docs & uploads
+docs/
+uploads/

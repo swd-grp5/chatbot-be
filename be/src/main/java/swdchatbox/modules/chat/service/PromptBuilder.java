@@ -18,37 +18,49 @@ import java.util.List;
 public class PromptBuilder {
 
     private static final String SYSTEM_PROMPT = """
-            Bạn là trợ lý học tập thông minh cho môn "Software Modeling and Design" \
-            (dựa trên textbook "Software Modeling and Design: UML, Use Cases, Patterns, and Software Architectures").
+            Bạn là trợ lý học tập chỉ trả lời dựa trên tài liệu người dùng đã gắn vào đoạn chat.
 
             ## Quy tắc BẮT BUỘC:
-            1. CHỈ trả lời dựa trên tài liệu được cung cấp trong phần "TÀI LIỆU THAM KHẢO" bên dưới.
-            2. Nếu câu hỏi nằm NGOÀI phạm vi tài liệu, trả lời: "Xin lỗi, câu hỏi này nằm ngoài phạm vi tài liệu môn học. Tôi chỉ có thể trả lời các câu hỏi liên quan đến nội dung đã được cung cấp."
-            3. LUÔN trích dẫn nguồn bằng format [1], [2], [3]... tương ứng với số thứ tự tài liệu tham khảo.
-            4. Trả lời bằng tiếng Việt rõ ràng, mạch lạc. Nếu có thuật ngữ chuyên ngành, giữ nguyên tiếng Anh kèm giải thích.
-            5. Nếu có thể, đưa ra ví dụ minh họa từ tài liệu.
-            6. Trả lời đầy đủ nhưng súc tích, tập trung vào nội dung chính.
+            1. CHỈ dùng nội dung trong phần "TÀI LIỆU THAM KHẢO". Không dùng kiến thức ngoài, \
+            textbook, hay kiến thức nền của bạn.
+            2. Nếu phần tham khảo KHÔNG có thông tin đủ để trả lời, nói rõ: \
+            "Xin lỗi, trong các tài liệu đã chọn không có nội dung phù hợp để trả lời câu hỏi này." \
+            Không được bịa thêm định nghĩa, phân loại, hay ví dụ không có trong đoạn tham khảo.
+            3. Nếu người dùng yêu cầu tóm tắt / tổng quan một tài liệu, hãy tóm tắt dựa trên \
+            các đoạn tham khảo của đúng tài liệu đó; nêu các ý chính, không nói là thiếu nội dung \
+            chỉ vì câu hỏi chung chung.
+            4. Mỗi ý lấy từ tài liệu phải có trích dẫn dạng [n] kèm tên file, ví dụ: [1] Present Require. \
+            CHỈ cite các [n] thực sự dùng để trả lời — không liệt kê mọi đoạn tham khảo.
+            5. Cuối câu trả lời, luôn có mục "Nguồn:" liệt kê ĐÚNG các [n] đã cite trong bài \
+            (không thêm [n] thừa) → tên tài liệu (và trang nếu có).
+            6. Trả lời bằng tiếng Việt rõ ràng, mạch lạc. Thuật ngữ chuyên ngành giữ nguyên tiếng Anh nếu tài liệu dùng vậy.
+            7. Không nêu tài liệu không nằm trong danh sách đã gắn / tham khảo.
             """;
 
     /**
      * Build the complete message list for the LLM.
      *
-     * @param retrievedChunks     chunks retrieved from vector search, with their
-     *                            citation indices
-     * @param conversationHistory previous messages in the conversation
-     * @param userQuestion        the current user question
-     * @param historyLimit        max number of history messages to include
+     * @param retrievedChunks          chunks retrieved from vector search, with their
+     *                                 citation indices
+     * @param conversationHistory      previous messages in the conversation
+     * @param userQuestion             the current user question
+     * @param historyLimit             max number of history messages to include
+     * @param attachedDocumentTitles   titles of documents attached to this conversation
      * @return list of LlmMessage ready to send to the LLM
      */
     public List<LlmMessage> buildMessages(
             List<RetrievedChunk> retrievedChunks,
             List<ChatMessage> conversationHistory,
             String userQuestion,
-            int historyLimit) {
+            int historyLimit,
+            List<String> attachedDocumentTitles) {
         List<LlmMessage> messages = new ArrayList<>();
 
         // 1. System instruction
         messages.add(LlmMessage.system(SYSTEM_PROMPT));
+
+        // 1b. Explicit list of docs attached to this chat (for meta questions)
+        messages.add(LlmMessage.system(buildAttachedDocsPrompt(attachedDocumentTitles)));
 
         // 2. Context from retrieved documents
         if (retrievedChunks != null && !retrievedChunks.isEmpty()) {
@@ -56,8 +68,10 @@ public class PromptBuilder {
             messages.add(LlmMessage.system(contextPrompt));
         } else {
             messages.add(LlmMessage.system(
-                    "KHÔNG TÌM THẤY tài liệu liên quan. " +
-                            "Hãy thông báo cho người dùng rằng không có tài liệu phù hợp trong hệ thống."));
+                    "KHÔNG TÌM THẤY đoạn nội dung liên quan trong các tài liệu đã gắn. " +
+                            "Nếu người dùng hỏi bạn đang được cung cấp tài liệu gì, chỉ liệt kê đúng danh sách đã gắn ở trên. " +
+                            "Với câu hỏi nội dung khác, trả lời rằng không tìm thấy đoạn phù hợp trong tài liệu đã chọn. " +
+                            "Không được tự bịa nội dung."));
         }
 
         // 3. Conversation history (limit to last N messages)
@@ -84,15 +98,35 @@ public class PromptBuilder {
         return messages;
     }
 
+    private String buildAttachedDocsPrompt(List<String> attachedDocumentTitles) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("## TÀI LIỆU ĐÃ GẮN VÀO ĐOẠN CHAT NÀY:\n");
+        if (attachedDocumentTitles == null || attachedDocumentTitles.isEmpty()) {
+            sb.append("(Chưa gắn tài liệu nào.)\n");
+            sb.append("Khi người dùng hỏi bạn đang được cung cấp tài liệu gì, trả lời rõ là chưa có tài liệu nào được gắn vào đoạn chat này.\n");
+        } else {
+            for (String title : attachedDocumentTitles) {
+                sb.append("- ").append(title).append("\n");
+            }
+            sb.append("Khi người dùng hỏi bạn đang được cung cấp tài liệu gì, CHỈ liệt kê đúng danh sách trên. ")
+                    .append("KHÔNG được nêu tên hoặc nội dung tài liệu không nằm trong danh sách này.\n");
+        }
+        return sb.toString();
+    }
+
     private String buildContextPrompt(List<RetrievedChunk> chunks) {
         StringBuilder sb = new StringBuilder();
-        sb.append("## TÀI LIỆU THAM KHẢO:\n\n");
+        sb.append("## TÀI LIỆU THAM KHẢO:\n");
+        sb.append("Chỉ được dùng các đoạn dưới đây. Mỗi [n] là một nguồn; khi trích dẫn hãy viết [n] kèm tên file. ");
+        sb.append("Chỉ đánh số [n] cho đoạn bạn thực sự dùng trong câu trả lời.\n\n");
 
         for (RetrievedChunk chunk : chunks) {
             sb.append("[").append(chunk.citationIndex()).append("] ");
 
-            if (chunk.documentTitle() != null) {
-                sb.append("**").append(chunk.documentTitle()).append("**");
+            if (chunk.documentTitle() != null && !chunk.documentTitle().isBlank()) {
+                sb.append(chunk.documentTitle());
+            } else {
+                sb.append("(không rõ tên file)");
             }
             if (chunk.pageStart() != null) {
                 sb.append(" (trang ").append(chunk.pageStart());

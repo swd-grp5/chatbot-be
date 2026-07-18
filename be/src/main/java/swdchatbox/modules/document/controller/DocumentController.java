@@ -31,6 +31,7 @@ import swdchatbox.modules.document.service.DocumentIndexingService;
 import swdchatbox.modules.document.service.DocumentService;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -168,6 +169,12 @@ public class DocumentController {
     @PostMapping("/{id}/reindex")
     public ResponseEntity<DocumentResponse> reindex(@PathVariable UUID id) {
         return ResponseEntity.ok(documentService.reindex(id));
+    }
+
+    @Operation(summary = "Index lại toàn bộ tài liệu", description = "Đưa tất cả document vào hàng đợi re-index để áp dụng lại logic chunk mới. Trả về số lượng document đã được đưa vào hàng đợi.")
+    @PostMapping("/reindex-all")
+    public ResponseEntity<Map<String, Integer>> reindexAll() {
+        return ResponseEntity.ok(Map.of("queued", documentService.reindexAll()));
     }
 
     @Operation(summary = "Bật/tắt tài liệu", description = "FE dùng để đổi nhanh trạng thái active của document.")

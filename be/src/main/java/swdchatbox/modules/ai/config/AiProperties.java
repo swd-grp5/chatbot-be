@@ -24,12 +24,9 @@ public class AiProperties {
 
     private Double temperature = 0.3;
     private Integer maxTokens = 2048;
-    private Integer embeddingDimension = 768; // Gemini default; OpenAI=1536
+    private Integer embeddingDimension = 768;
 
     private Integer retrievalTopK = 5;
     private Double retrievalScoreThreshold = 0.5;
     private Integer conversationHistoryLimit = 10;
-
-    // Qdrant properties removed — vector storage now uses MySQL (in-memory cosine
-    // similarity)
 }

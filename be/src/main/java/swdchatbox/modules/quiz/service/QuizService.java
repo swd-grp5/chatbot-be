@@ -12,17 +12,17 @@ import swdchatbox.modules.document.entity.Document;
 import swdchatbox.modules.document.repository.DocumentRepository;
 import swdchatbox.modules.enrollment.service.SubjectEnrollmentService;
 import swdchatbox.modules.quiz.dto.request.*;
-import swdchatbox.modules.quiz.dto.response.QuizAttemptResponse;
-import swdchatbox.modules.quiz.dto.response.QuizResponse;
-import swdchatbox.modules.quiz.dto.response.QuizSummaryResponse;
+import swdchatbox.modules.quiz.dto.response.*;
 import swdchatbox.modules.quiz.entity.*;
 import swdchatbox.modules.quiz.enums.MultipleChoiceMode;
+import swdchatbox.modules.quiz.enums.PointsDistributionMode;
 import swdchatbox.modules.quiz.enums.QuizStatus;
 import swdchatbox.modules.quiz.mapper.QuizMapper;
 import swdchatbox.modules.quiz.QuestionTypeCodes;
 import swdchatbox.modules.quiz.repository.QuizAttemptRepository;
 import swdchatbox.modules.quiz.repository.QuizRepository;
 import swdchatbox.modules.quiz.repository.QuizSpecifications;
+import swdchatbox.modules.quiz.repository.QuizVariantRepository;
 import swdchatbox.modules.role.RoleCodes;
 import swdchatbox.modules.subject.entity.Subject;
 import swdchatbox.modules.subscription.repository.UserSubscriptionRepository;
@@ -42,9 +42,11 @@ public class QuizService {
 
     private final QuizRepository quizRepository;
     private final QuizAttemptRepository quizAttemptRepository;
+    private final QuizVariantRepository quizVariantRepository;
     private final UserRepository userRepository;
     private final SubjectEnrollmentService subjectEnrollmentService;
     private final QuestionTypeService questionTypeService;
+    private final BankQuestionService bankQuestionService;
     private final DocumentRepository documentRepository;
     private final UserSubscriptionRepository userSubscriptionRepository;
     private final ObjectMapper objectMapper;
@@ -66,21 +68,33 @@ public class QuizService {
                 .build();
     }
 
+    @Transactional
     public QuizResponse findById(UUID id, String userEmail, boolean forStudentAttempt) {
         Quiz quiz = findQuiz(id);
         User user = resolveUser(userEmail);
         validateQuizAccess(user, quiz, forStudentAttempt);
         boolean includeAnswers = !forStudentAttempt && !RoleCodes.STUDENT.equals(user.getRole().getCode());
-        return QuizMapper.toResponse(quiz, includeAnswers);
+        return QuizMapper.toResponse(quiz, includeAnswers, loadVariantSummaries(id));
+    }
+
+    private List<QuizVariantSummaryResponse> loadVariantSummaries(UUID quizId) {
+        return quizVariantRepository.findAllByQuiz_IdOrderByVariantNumberAsc(quizId).stream()
+                .map(QuizMapper::toVariantSummary)
+                .toList();
     }
 
     @Transactional
     public QuizResponse create(QuizCreateRequest request, String userEmail) {
-        return saveQuiz(request, userEmail, false);
+        return saveQuiz(request, userEmail, false, false);
     }
 
     @Transactional
     public QuizResponse saveQuiz(QuizCreateRequest request, String userEmail, boolean aiGenerated) {
+        return saveQuiz(request, userEmail, aiGenerated, false);
+    }
+
+    @Transactional
+    public QuizResponse saveQuiz(QuizCreateRequest request, String userEmail, boolean aiGenerated, Boolean allowRetake) {
         if (request == null) {
             throw new BadRequestException("Request body is required");
         }
@@ -105,13 +119,272 @@ public class QuizService {
                 .timeLimitMinutes(request.getTimeLimitMinutes())
                 .active(true)
                 .aiGenerated(aiGenerated)
+                .allowRetake(Boolean.TRUE.equals(allowRetake))
                 .build();
 
-        applyQuestions(quiz, request.getQuestions());
+        applyQuestions(quiz, request.getQuestions(), true, aiGenerated);
         quiz = quizRepository.saveAndFlush(quiz);
         // Reload so @CreationTimestamp is populated in the response
         Quiz saved = quizRepository.findWithDetailsById(quiz.getId()).orElse(quiz);
         return QuizMapper.toResponse(saved, true);
+    }
+
+    @Transactional
+    public QuizResponse assemble(QuizAssembleRequest request, String userEmail) {
+        if (request == null) {
+            throw new BadRequestException("Request body is required");
+        }
+        if (request.getSubjectId() == null) {
+            throw new BadRequestException("subjectId is required");
+        }
+        if (request.getTitle() == null || request.getTitle().isBlank()) {
+            throw new BadRequestException("title is required");
+        }
+
+        User lecturer = resolveUser(userEmail);
+        subjectEnrollmentService.requireLecturerCanManageQuiz(lecturer, request.getSubjectId());
+        Subject subject = subjectEnrollmentService.findActiveSubject(request.getSubjectId());
+
+        List<BankQuestion> pool = bankQuestionService.getPoolForAssembly(request.getBankQuestionIds(), subject.getId());
+        int poolSize = pool.size();
+
+        int variantCount = request.getVariantCount() != null ? request.getVariantCount() : 1;
+        Integer perVariant = request.getQuestionsPerVariant();
+        if (perVariant != null && perVariant > poolSize) {
+            throw new BadRequestException("questionsPerVariant (" + perVariant + ") cannot exceed pool size (" + poolSize + ")");
+        }
+
+        PointsDistributionMode mode = request.getPointsMode() != null
+                ? request.getPointsMode() : PointsDistributionMode.EVEN;
+        Map<UUID, Double> pointsByBankId = resolveAssemblePoints(request, pool, perVariant, poolSize, mode);
+
+        Quiz quiz = Quiz.builder()
+                .subject(subject)
+                .createdBy(lecturer)
+                .title(request.getTitle().trim())
+                .description(request.getDescription())
+                .status(QuizStatus.DRAFT)
+                .timeLimitMinutes(request.getTimeLimitMinutes())
+                .active(true)
+                .aiGenerated(false)
+                .shuffleQuestions(Boolean.TRUE.equals(request.getShuffleQuestions()))
+                .shuffleOptions(Boolean.TRUE.equals(request.getShuffleOptions()))
+                .showScore(!Boolean.FALSE.equals(request.getShowScore()))
+                .allowRetake(Boolean.TRUE.equals(request.getAllowRetake()))
+                .questionsPerVariant(perVariant)
+                .variantCount(variantCount)
+                .build();
+
+        int order = 0;
+        for (BankQuestion b : pool) {
+            QuizQuestion question = QuizQuestion.builder()
+                    .quiz(quiz)
+                    .questionType(b.getQuestionType())
+                    .bankQuestion(b)
+                    .multipleChoiceMode(b.getMultipleChoiceMode())
+                    .questionText(b.getQuestionText())
+                    .points(round2(pointsByBankId.get(b.getId())))
+                    .sortOrder(order++)
+                    .sourceDocument(b.getSourceDocument())
+                    .sourceExcerpt(b.getSourceExcerpt())
+                    .build();
+            Set<QuizOption> options = b.getOptions().stream()
+                    .sorted(Comparator.comparing(BankQuestionOption::getSortOrder))
+                    .map(o -> QuizOption.builder()
+                            .question(question)
+                            .optionText(o.getOptionText())
+                            .isCorrect(o.getIsCorrect())
+                            .sortOrder(o.getSortOrder())
+                            .build())
+                    .collect(Collectors.toCollection(LinkedHashSet::new));
+            question.setOptions(options);
+            quiz.getQuestions().add(question);
+        }
+
+        quiz = quizRepository.saveAndFlush(quiz);
+        Quiz saved = quizRepository.findWithDetailsById(quiz.getId()).orElse(quiz);
+        generateVariants(saved);
+        saved = quizRepository.saveAndFlush(saved);
+        return QuizMapper.toResponse(saved, true, loadVariantSummaries(saved.getId()));
+    }
+
+    @Transactional
+    public QuizResponse regenerateVariants(UUID id, String userEmail) {
+        Quiz quiz = findQuiz(id);
+        User lecturer = resolveUser(userEmail);
+        subjectEnrollmentService.requireLecturerCanManageQuiz(lecturer, quiz.getSubject().getId());
+        if (quiz.getStatus() != QuizStatus.DRAFT) {
+            throw new BadRequestException("Variants can only be regenerated while the quiz is in DRAFT");
+        }
+        if (quiz.getQuestions() == null || quiz.getQuestions().isEmpty()) {
+            throw new BadRequestException("Quiz has no question pool to build variants from");
+        }
+        generateVariants(quiz);
+        quiz = quizRepository.saveAndFlush(quiz);
+        return QuizMapper.toResponse(quiz, true, loadVariantSummaries(quiz.getId()));
+    }
+
+    private Map<UUID, Double> resolveAssemblePoints(QuizAssembleRequest request, List<BankQuestion> pool,
+                                                    Integer perVariant, int poolSize, PointsDistributionMode mode) {
+        Map<UUID, Double> result = new HashMap<>();
+        if (mode == PointsDistributionMode.CUSTOM) {
+            Map<UUID, Double> custom = new HashMap<>();
+            if (request.getCustomPoints() != null) {
+                for (QuestionPointsItem item : request.getCustomPoints()) {
+                    custom.put(item.getBankQuestionId(), item.getPoints());
+                }
+            }
+            for (BankQuestion b : pool) {
+                Double pts = custom.get(b.getId());
+                if (pts == null) {
+                    pts = b.getDefaultPoints();
+                }
+                if (pts == null || pts < 0.1) {
+                    throw new BadRequestException("points (>= 0.1) is required for bank question: " + b.getId());
+                }
+                result.put(b.getId(), pts);
+            }
+        } else {
+            double totalPoints = request.getTotalPoints() != null ? request.getTotalPoints() : 10.0;
+            int effectiveCount = perVariant != null ? perVariant : poolSize;
+            if (effectiveCount <= 0) {
+                throw new BadRequestException("Cannot distribute points over zero questions");
+            }
+            double perPoint = totalPoints / effectiveCount;
+            if (perPoint < 0.1) {
+                throw new BadRequestException("totalPoints is too small; each question needs at least 0.1 points");
+            }
+            for (BankQuestion b : pool) {
+                result.put(b.getId(), perPoint);
+            }
+        }
+        return result;
+    }
+
+    /** Sinh lại toàn bộ đề (variant) từ pool câu hỏi hiện tại của quiz theo cấu hình xáo trộn. */
+    private void generateVariants(Quiz quiz) {
+        quiz.getVariants().clear();
+
+        List<QuizQuestion> pool = new ArrayList<>(quiz.getQuestions());
+        int poolSize = pool.size();
+        int perVariant = quiz.getQuestionsPerVariant() != null
+                ? Math.min(quiz.getQuestionsPerVariant(), poolSize) : poolSize;
+        int count = quiz.getVariantCount() != null ? quiz.getVariantCount() : 1;
+        Random rnd = new Random();
+
+        for (int v = 1; v <= count; v++) {
+            List<QuizQuestion> selected = new ArrayList<>(pool);
+            if (Boolean.TRUE.equals(quiz.getShuffleQuestions())) {
+                Collections.shuffle(selected, rnd);
+            }
+            selected = new ArrayList<>(selected.subList(0, perVariant));
+
+            QuizVariant variant = QuizVariant.builder()
+                    .quiz(quiz)
+                    .variantNumber(v)
+                    .build();
+
+            int order = 0;
+            for (QuizQuestion q : selected) {
+                List<UUID> optionIds = q.getOptions().stream()
+                        .sorted(Comparator.comparing(QuizOption::getSortOrder))
+                        .map(QuizOption::getId)
+                        .collect(Collectors.toList());
+                if (Boolean.TRUE.equals(quiz.getShuffleOptions())) {
+                    Collections.shuffle(optionIds, rnd);
+                }
+                variant.getQuestions().add(QuizVariantQuestion.builder()
+                        .variant(variant)
+                        .question(q)
+                        .sortOrder(order++)
+                        .optionOrder(toJson(optionIds))
+                        .build());
+            }
+            quiz.getVariants().add(variant);
+        }
+    }
+
+    @Transactional
+    public QuizStartResponse startAttempt(UUID quizId, String userEmail) {
+        Quiz quiz = findQuiz(quizId);
+        User student = resolveUser(userEmail);
+        validateQuizAccess(student, quiz, true);
+        requireCanAttempt(quiz, student.getId());
+
+        List<QuizVariant> variants = quizVariantRepository.findAllByQuiz_IdOrderByVariantNumberAsc(quizId);
+        if (variants.isEmpty()) {
+            List<QuizQuestion> ordered = dedupeQuestionsById(quiz.getQuestions());
+            ordered.sort(Comparator.comparing(QuizQuestion::getSortOrder, Comparator.nullsLast(Integer::compareTo)));
+            List<QuizQuestionResponse> questions = new ArrayList<>();
+            double total = 0.0;
+            for (QuizQuestion q : ordered) {
+                List<QuizOption> opts = q.getOptions().stream()
+                        .sorted(Comparator.comparing(QuizOption::getSortOrder))
+                        .collect(Collectors.toList());
+                questions.add(QuizMapper.toStudentQuestion(q, q.getSortOrder(), opts));
+                total += q.getPoints() != null ? q.getPoints() : 0.0;
+            }
+            return QuizStartResponse.builder()
+                    .quizId(quiz.getId())
+                    .title(quiz.getTitle())
+                    .description(quiz.getDescription())
+                    .timeLimitMinutes(quiz.getTimeLimitMinutes())
+                    .questionCount(questions.size())
+                    .totalPoints(round2(total))
+                    .questions(questions)
+                    .build();
+        }
+
+        QuizVariant picked = variants.get(new Random().nextInt(variants.size()));
+        QuizVariant detail = quizVariantRepository.findWithDetailsById(picked.getId())
+                .orElseThrow(() -> new ResourceNotFoundException("Quiz variant not found"));
+
+        List<QuizQuestionResponse> questions = new ArrayList<>();
+        double total = 0.0;
+        for (QuizVariantQuestion vq : dedupeVariantQuestions(detail.getQuestions())) {
+            QuizQuestion q = vq.getQuestion();
+            List<QuizOption> ordered = orderOptions(q, vq.getOptionOrder());
+            questions.add(QuizMapper.toStudentQuestion(q, vq.getSortOrder(), ordered));
+            total += q.getPoints() != null ? q.getPoints() : 0.0;
+        }
+        return QuizStartResponse.builder()
+                .quizId(quiz.getId())
+                .title(quiz.getTitle())
+                .description(quiz.getDescription())
+                .timeLimitMinutes(quiz.getTimeLimitMinutes())
+                .variantId(detail.getId())
+                .variantNumber(detail.getVariantNumber())
+                .questionCount(questions.size())
+                .totalPoints(round2(total))
+                .questions(questions)
+                .build();
+    }
+
+    private List<QuizOption> orderOptions(QuizQuestion question, String optionOrderJson) {
+        Map<UUID, QuizOption> byId = question.getOptions().stream()
+                .collect(Collectors.toMap(QuizOption::getId, o -> o, (a, b) -> a, LinkedHashMap::new));
+        List<QuizOption> ordered = new ArrayList<>();
+        if (optionOrderJson != null && !optionOrderJson.isBlank()) {
+            try {
+                String[] ids = objectMapper.readValue(optionOrderJson, String[].class);
+                for (String id : ids) {
+                    QuizOption o = byId.remove(UUID.fromString(id));
+                    if (o != null) {
+                        ordered.add(o);
+                    }
+                }
+            } catch (Exception ignored) {
+                // fall back to natural order below
+            }
+        }
+        // Append any options not covered by the stored order (safety).
+        ordered.addAll(byId.values());
+        if (ordered.isEmpty()) {
+            ordered = question.getOptions().stream()
+                    .sorted(Comparator.comparing(QuizOption::getSortOrder))
+                    .collect(Collectors.toList());
+        }
+        return ordered;
     }
 
     @Transactional
@@ -130,15 +403,59 @@ public class QuizService {
         if (quiz.getStatus() == QuizStatus.CLOSED) {
             throw new BadRequestException("Closed quizzes cannot be updated");
         }
+        if (quizAttemptRepository.existsByQuiz_Id(id)) {
+            throw new BadRequestException("Quiz already has attempts and cannot have its questions rewritten");
+        }
 
         validateQuestions(request.getQuestions());
         quiz.setTitle(request.getTitle().trim());
         quiz.setDescription(request.getDescription());
         quiz.setTimeLimitMinutes(request.getTimeLimitMinutes());
-        quiz.getQuestions().clear();
-        applyQuestions(quiz, request.getQuestions());
-        quiz = quizRepository.save(quiz);
-        return QuizMapper.toResponse(quiz, true);
+
+        boolean hadVariants = !quizVariantRepository.findAllByQuiz_IdOrderByVariantNumberAsc(id).isEmpty();
+        boolean configuredForVariants = quiz.getQuestionsPerVariant() != null
+                || (quiz.getVariantCount() != null && quiz.getVariantCount() > 1)
+                || Boolean.TRUE.equals(quiz.getShuffleQuestions())
+                || Boolean.TRUE.equals(quiz.getShuffleOptions());
+
+        // Variants hold FKs to pool questions — must delete + flush before rebuilding the pool.
+        replaceQuestionPool(quiz, request.getQuestions());
+
+        if (hadVariants || configuredForVariants) {
+            generateVariants(quiz);
+        }
+
+        quiz = quizRepository.saveAndFlush(quiz);
+        Quiz saved = quizRepository.findWithDetailsById(quiz.getId()).orElse(quiz);
+        return QuizMapper.toResponse(saved, true, loadVariantSummaries(saved.getId()));
+    }
+
+    /**
+     * Rebuild the question pool safely when the quiz may have variants and/or
+     * cartesian-duplicated questions from {@code findWithDetailsById} EntityGraph.
+     */
+    private void replaceQuestionPool(Quiz quiz, List<QuizQuestionRequest> questionRequests) {
+        // Prefer repo delete so we still clear DB rows even if the lazy variants bag
+        // was never initialized on this entity instance.
+        var existingVariants = quizVariantRepository.findAllByQuiz_IdOrderByVariantNumberAsc(quiz.getId());
+        if (!existingVariants.isEmpty()) {
+            quiz.getVariants().clear();
+            quizVariantRepository.deleteAll(existingVariants);
+            quizVariantRepository.flush();
+        }
+
+        if (quiz.getQuestions() != null && !quiz.getQuestions().isEmpty()) {
+            // EntityGraph (questions + options) can put the same question in the bag many times.
+            List<QuizQuestion> unique = dedupeQuestionsById(quiz.getQuestions());
+            quiz.getQuestions().clear();
+            quiz.getQuestions().addAll(unique);
+            quizRepository.flush();
+            quiz.getQuestions().clear();
+            quizRepository.flush();
+        }
+
+        applyQuestions(quiz, questionRequests, false, false);
+        quizRepository.flush();
     }
 
     @Transactional
@@ -178,6 +495,34 @@ public class QuizService {
     }
 
     @Transactional
+    public QuizResponse updateSettings(UUID id, QuizSettingsRequest request, String userEmail) {
+        if (request == null) {
+            throw new BadRequestException("Request body is required");
+        }
+        if (request.getShowScore() == null && request.getAllowRetake() == null) {
+            throw new BadRequestException("At least one setting must be provided");
+        }
+
+        Quiz quiz = findQuiz(id);
+        User lecturer = resolveUser(userEmail);
+        subjectEnrollmentService.requireLecturerCanManageQuiz(lecturer, quiz.getSubject().getId());
+
+        if (quiz.getStatus() == QuizStatus.CLOSED) {
+            throw new BadRequestException("Closed quizzes cannot be updated");
+        }
+
+        if (request.getShowScore() != null) {
+            quiz.setShowScore(request.getShowScore());
+        }
+        if (request.getAllowRetake() != null) {
+            quiz.setAllowRetake(request.getAllowRetake());
+        }
+
+        quiz = quizRepository.save(quiz);
+        return QuizMapper.toResponse(quiz, true, loadVariantSummaries(quiz.getId()));
+    }
+
+    @Transactional
     public void delete(UUID id, String userEmail) {
         Quiz quiz = findQuiz(id);
         User lecturer = resolveUser(userEmail);
@@ -198,16 +543,35 @@ public class QuizService {
         if (!Boolean.TRUE.equals(quiz.getActive())) {
             throw new BadRequestException("Quiz is not active");
         }
+        requireCanAttempt(quiz, student.getId());
 
-        Map<UUID, QuizQuestion> questionMap = quiz.getQuestions().stream()
-                .collect(Collectors.toMap(QuizQuestion::getId, question -> question));
+        List<QuizVariant> variants = quizVariantRepository.findAllByQuiz_IdOrderByVariantNumberAsc(quizId);
+        QuizVariant variant = null;
+        Map<UUID, QuizQuestion> questionMap;
+        if (!variants.isEmpty()) {
+            if (request.getVariantId() == null) {
+                throw new BadRequestException("variantId is required for this quiz");
+            }
+            QuizVariant detail = quizVariantRepository.findWithDetailsById(request.getVariantId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Quiz variant not found"));
+            if (detail.getQuiz() == null || !detail.getQuiz().getId().equals(quizId)) {
+                throw new BadRequestException("Variant does not belong to this quiz");
+            }
+            variant = detail;
+            questionMap = detail.getQuestions().stream()
+                    .map(QuizVariantQuestion::getQuestion)
+                    .collect(Collectors.toMap(QuizQuestion::getId, question -> question));
+        } else {
+            questionMap = quiz.getQuestions().stream()
+                    .collect(Collectors.toMap(QuizQuestion::getId, question -> question));
+        }
 
         if (request.getAnswers().size() != questionMap.size()) {
             throw new BadRequestException("All questions must be answered");
         }
 
         double totalScore = 0.0;
-        double maxScore = quiz.getQuestions().stream()
+        double maxScore = questionMap.values().stream()
                 .mapToDouble(q -> q.getPoints() != null ? q.getPoints() : 0.0)
                 .sum();
         List<QuizAnswer> gradedAnswers = new ArrayList<>();
@@ -231,6 +595,7 @@ public class QuizService {
         QuizAttempt attempt = QuizAttempt.builder()
                 .quiz(quiz)
                 .student(student)
+                .variant(variant)
                 .totalScore(round2(totalScore))
                 .maxScore(round2(maxScore))
                 .build();
@@ -239,7 +604,20 @@ public class QuizService {
         }
         attempt.setAnswers(gradedAnswers);
         QuizAttempt savedAttempt = quizAttemptRepository.save(attempt);
-        return QuizMapper.toAttemptResponse(savedAttempt);
+        return QuizMapper.toAttemptResponse(savedAttempt, isResultsVisible(quiz));
+    }
+
+    private boolean isResultsVisible(Quiz quiz) {
+        return !Boolean.FALSE.equals(quiz.getShowScore());
+    }
+
+    private void requireCanAttempt(Quiz quiz, UUID studentId) {
+        if (Boolean.TRUE.equals(quiz.getAllowRetake())) {
+            return;
+        }
+        if (quizAttemptRepository.existsByQuiz_IdAndStudent_Id(quiz.getId(), studentId)) {
+            throw new BadRequestException("You have already submitted this quiz and retakes are not allowed");
+        }
     }
 
     public List<QuizAttemptResponse> getMyAttempts(UUID quizId, String userEmail) {
@@ -247,10 +625,41 @@ public class QuizService {
         if (!RoleCodes.STUDENT.equals(student.getRole().getCode()) && !RoleCodes.ADMIN.equals(student.getRole().getCode())) {
             throw new BadRequestException("Only students can view their quiz attempts");
         }
-        findQuiz(quizId);
+        Quiz quiz = findQuiz(quizId);
+        boolean resultsVisible = isResultsVisible(quiz);
         return quizAttemptRepository.findAllByQuiz_IdAndStudent_IdOrderBySubmittedAtDesc(quizId, student.getId())
                 .stream()
-                .map(QuizMapper::toAttemptResponse)
+                .map(attempt -> QuizMapper.toAttemptResponse(attempt, resultsVisible))
+                .toList();
+    }
+
+    @Transactional
+    public List<LecturerQuizAttemptResponse> getLecturerAttempts(UUID quizId, String userEmail) {
+        Quiz quiz = findQuiz(quizId);
+        User lecturer = resolveUser(userEmail);
+        subjectEnrollmentService.requireLecturerCanManageQuiz(lecturer, quiz.getSubject().getId());
+
+        return quizAttemptRepository.findAllByQuiz_IdOrderBySubmittedAtDesc(quizId).stream()
+                .map(attempt -> {
+                    User student = attempt.getStudent();
+                    double max = attempt.getMaxScore() != null ? attempt.getMaxScore() : 0.0;
+                    double total = attempt.getTotalScore() != null ? attempt.getTotalScore() : 0.0;
+                    double percentage = max == 0.0 ? 0.0 : Math.round((total * 10000.0) / max) / 100.0;
+                    QuizVariant variant = attempt.getVariant();
+                    return LecturerQuizAttemptResponse.builder()
+                            .id(attempt.getId())
+                            .quizId(quizId)
+                            .studentId(student.getId())
+                            .studentName(student.getFullName())
+                            .studentEmail(student.getEmail())
+                            .variantId(variant != null ? variant.getId() : null)
+                            .variantNumber(variant != null ? variant.getVariantNumber() : null)
+                            .totalScore(attempt.getTotalScore())
+                            .maxScore(attempt.getMaxScore())
+                            .percentage(percentage)
+                            .submittedAt(attempt.getSubmittedAt())
+                            .build();
+                })
                 .toList();
     }
 
@@ -261,7 +670,7 @@ public class QuizService {
         if (!attempt.getQuiz().getId().equals(quizId)) {
             throw new BadRequestException("Attempt does not belong to this quiz");
         }
-        return QuizMapper.toAttemptResponse(attempt);
+        return QuizMapper.toAttemptResponse(attempt, isResultsVisible(attempt.getQuiz()));
     }
 
     private Specification<Quiz> buildSpecification(QuizFilterRequest filter, User user) {
@@ -312,7 +721,8 @@ public class QuizService {
         throw new BadRequestException("You do not have access to this quiz");
     }
 
-    private void applyQuestions(Quiz quiz, List<QuizQuestionRequest> questionRequests) {
+    private void applyQuestions(Quiz quiz, List<QuizQuestionRequest> questionRequests,
+                               boolean saveNewToBank, boolean aiGenerated) {
         for (QuizQuestionRequest questionRequest : questionRequests) {
             QuestionType questionType = questionTypeService.findActiveQuestionType(questionRequest.getQuestionTypeId());
             if (!QuestionTypeCodes.MULTIPLE_CHOICE.equals(questionType.getCode())) {
@@ -339,6 +749,16 @@ public class QuizService {
                             .build())
                     .collect(Collectors.toCollection(LinkedHashSet::new));
             question.setOptions(options);
+
+            // Đồng bộ ngân hàng câu hỏi: gắn câu gốc nếu có, hoặc lưu mới khi tạo quiz.
+            if (questionRequest.getBankQuestionId() != null) {
+                question.setBankQuestion(
+                        bankQuestionService.requireForSubject(questionRequest.getBankQuestionId(), quiz.getSubject().getId()));
+            } else if (saveNewToBank) {
+                question.setBankQuestion(
+                        bankQuestionService.saveFromQuizQuestion(question, quiz.getSubject(), quiz.getCreatedBy(), aiGenerated));
+            }
+
             quiz.getQuestions().add(question);
         }
     }
@@ -472,6 +892,39 @@ public class QuizService {
     private Quiz findQuiz(UUID id) {
         return quizRepository.findWithDetailsById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Quiz not found"));
+    }
+
+    /** EntityGraph questions+options trên List có thể nhân bản câu hỏi (cartesian). */
+    private static List<QuizQuestion> dedupeQuestionsById(List<QuizQuestion> questions) {
+        if (questions == null || questions.isEmpty()) {
+            return new ArrayList<>();
+        }
+        Map<UUID, QuizQuestion> unique = new LinkedHashMap<>();
+        for (QuizQuestion q : questions) {
+            if (q != null && q.getId() != null) {
+                unique.putIfAbsent(q.getId(), q);
+            }
+        }
+        return new ArrayList<>(unique.values());
+    }
+
+    private static List<QuizVariantQuestion> dedupeVariantQuestions(List<QuizVariantQuestion> items) {
+        if (items == null || items.isEmpty()) {
+            return new ArrayList<>();
+        }
+        Map<UUID, QuizVariantQuestion> unique = new LinkedHashMap<>();
+        for (QuizVariantQuestion vq : items) {
+            if (vq == null) continue;
+            UUID key = vq.getId() != null
+                    ? vq.getId()
+                    : (vq.getQuestion() != null ? vq.getQuestion().getId() : null);
+            if (key != null) {
+                unique.putIfAbsent(key, vq);
+            }
+        }
+        List<QuizVariantQuestion> result = new ArrayList<>(unique.values());
+        result.sort(Comparator.comparing(QuizVariantQuestion::getSortOrder, Comparator.nullsLast(Integer::compareTo)));
+        return result;
     }
 
     private User resolveUser(String userEmail) {

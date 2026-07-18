@@ -40,6 +40,8 @@ import swdchatbox.modules.embedding.service.VectorStoreService;
 import swdchatbox.modules.user.entity.User;
 
 import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Main service orchestrating the RAG (Retrieval-Augmented Generation) pipeline.
@@ -67,6 +69,7 @@ public class ChatService {
     private final AiProperties aiProperties;
     private final ModelSettingService modelSettingService;
     private final ObjectMapper objectMapper;
+    private final swdchatbox.modules.credit.service.CreditService creditService;
 
     // ───────────────── Conversation CRUD ─────────────────
 
@@ -78,20 +81,11 @@ public class ChatService {
             subject = subjectEnrollmentService.findActiveSubject(request.getSubjectId());
         }
 
-        String documentIdsJson = null;
-        if (request.getDocumentIds() != null && !request.getDocumentIds().isEmpty()) {
-            try {
-                documentIdsJson = objectMapper.writeValueAsString(request.getDocumentIds());
-            } catch (Exception e) {
-                throw new BadRequestException("Invalid document IDs");
-            }
-        }
-
         ChatConversation conversation = ChatConversation.builder()
                 .user(user)
                 .subject(subject)
                 .title(request.getTitle())
-                .selectedDocumentIdsJson(documentIdsJson)
+                .selectedDocumentIdsJson(serializeDocumentIds(request.getDocumentIds()))
                 .totalMessages(0)
                 .active(true)
                 .build();
@@ -119,10 +113,17 @@ public class ChatService {
     }
 
     @Transactional
-    public ConversationResponse updateConversationTitle(UUID conversationId, UUID userId,
+    public ConversationResponse updateConversation(UUID conversationId, UUID userId,
             UpdateConversationRequest request) {
         ChatConversation conversation = findConversation(conversationId, userId);
-        conversation.setTitle(request.getTitle());
+
+        if (request.getTitle() != null && !request.getTitle().isBlank()) {
+            conversation.setTitle(request.getTitle().trim());
+        }
+        if (request.getDocumentIds() != null) {
+            conversation.setSelectedDocumentIdsJson(serializeDocumentIds(request.getDocumentIds()));
+        }
+
         conversation = conversationRepository.save(conversation);
         return toConversationResponse(conversation);
     }
@@ -133,15 +134,25 @@ public class ChatService {
         // Verify ownership
         findConversation(conversationId, userId);
 
-        return messageRepository
-                .findAllByConversation_IdOrderByCreatedAtAsc(conversationId, pageable)
-                .map(this::toMessageResponse);
+        Page<ChatMessage> messagesPage = messageRepository
+                .findAllByConversation_IdOrderByCreatedAtAsc(conversationId, pageable);
+
+        List<UUID> messageIds = messagesPage.getContent().stream()
+                .map(ChatMessage::getId)
+                .toList();
+
+        Map<UUID, List<CitationResponse>> citationsByMessageId = loadCitationsForMessages(messageIds);
+
+        return messagesPage.map(msg -> toMessageResponse(
+                msg,
+                citationsByMessageId.getOrDefault(msg.getId(), List.of())));
     }
 
     // ───────────────── RAG Pipeline: Send Message ─────────────────
 
     @Transactional
     public ChatAnswerResponse sendMessage(UUID conversationId, SendMessageRequest request, User user) {
+        creditService.ensureEnough(user, "CHAT_QUESTION");
         ChatConversation conversation = findConversation(conversationId, user.getId());
         String userQuestion = request.getMessage();
 
@@ -151,34 +162,113 @@ public class ChatService {
                 .role(MessageRole.USER)
                 .content(userQuestion)
                 .build();
-        messageRepository.save(userMessage);
+        userMessage = messageRepository.save(userMessage);
+        final UUID savedUserMessageId = userMessage.getId();
+
+        // Resolve AI config early so failure logs can name provider/model
+        EffectiveAiConfig aiConfig = modelSettingService.resolveEffectiveConfig();
 
         // 2. Embed the user question
         List<Double> queryVector;
         try {
             queryVector = embeddingService.embed(userQuestion);
         } catch (Exception e) {
-            log.error("Failed to embed user question", e);
-            return buildErrorResponse(conversation, "Không thể xử lý câu hỏi. Vui lòng thử lại.");
+            log.error(
+                    "[chat] step=embed-query conversationId={} provider={} embeddingModel={} error={}",
+                    conversationId,
+                    aiConfig.getProvider(),
+                    aiConfig.getEmbeddingModel(),
+                    e.getMessage(),
+                    e);
+            return buildErrorResponse(conversation, userMessage,
+                    "Không thể xử lý câu hỏi. Vui lòng thử lại.",
+                    aiConfig.getChatModel());
         }
 
-        EffectiveAiConfig aiConfig = modelSettingService.resolveEffectiveConfig();
+        // 3–4. Title-aware retrieval (+ summary fallback for vague questions)
+        List<UUID> selectedDocIds = parseDocumentIds(conversation.getSelectedDocumentIdsJson());
+        List<Document> attachedDocs = loadAttachedDocuments(selectedDocIds);
+        List<Document> titleMatchedDocs = matchDocumentsByTitle(userQuestion, attachedDocs);
+        boolean summaryIntent = isSummaryIntent(userQuestion);
 
-        // 3. Vector search — find relevant document chunks
-        Map<String, Object> filter = buildSearchFilter(conversation);
-        List<VectorSearchResult> searchResults;
-        try {
-            searchResults = vectorStoreService.search(
-                    queryVector,
-                    aiConfig.getTopK(),
-                    filter);
-        } catch (Exception e) {
-            log.error("Vector search failed", e);
-            searchResults = List.of();
+        List<UUID> retrievalDocIds = !titleMatchedDocs.isEmpty()
+                ? titleMatchedDocs.stream().map(Document::getId).toList()
+                : selectedDocIds;
+        Map<String, Object> filter = buildSearchFilter(conversation, retrievalDocIds);
+
+        log.info(
+                "[chat] step=retrieve conversationId={} selectedDocIds={} titleMatched={} summaryIntent={} filter={}",
+                conversationId,
+                selectedDocIds,
+                titleMatchedDocs.stream().map(Document::getTitle).toList(),
+                summaryIntent,
+                filter);
+
+        List<PromptBuilder.RetrievedChunk> retrievedChunks;
+        List<Document> summaryTargets = resolveSummaryTargets(
+                userQuestion, titleMatchedDocs, attachedDocs, summaryIntent);
+        if (!summaryTargets.isEmpty()) {
+            // Vague / title-only questions → load representative chunks (skip weak semantic match)
+            retrievedChunks = dedupeNearDuplicateChunks(
+                    loadRepresentativeChunks(summaryTargets, Math.max(aiConfig.getTopK() * 2, 8)));
+            log.info("[chat] step=summary-fallback conversationId={} docs={} chunks={}",
+                    conversationId,
+                    summaryTargets.stream().map(Document::getTitle).toList(),
+                    retrievedChunks.size());
+        } else {
+            List<VectorSearchResult> searchResults;
+            try {
+                // When scoped to the user's attached docs we keep the top-K best chunks
+                // regardless of the default threshold — cross-lingual (VN query / EN doc)
+                // cosine scores are often below 0.5 yet still the right chunks.
+                boolean scoped = (retrievalDocIds != null && !retrievalDocIds.isEmpty());
+                double threshold = scoped ? 0.0 : aiProperties.getRetrievalScoreThreshold();
+                searchResults = vectorStoreService.search(
+                        queryVector,
+                        aiConfig.getTopK(),
+                        filter,
+                        threshold);
+            } catch (Exception e) {
+                log.error(
+                        "[chat] step=vector-search conversationId={} provider={} embeddingModel={} topK={} error={}",
+                        conversationId,
+                        aiConfig.getProvider(),
+                        aiConfig.getEmbeddingModel(),
+                        aiConfig.getTopK(),
+                        e.getMessage(),
+                        e);
+                searchResults = List.of();
+            }
+
+            retrievedChunks = enrichSearchResults(searchResults);
+
+            // Hybrid: merge in lexical keyword matches so literal terms
+            // ("duration", "deadline") are found even when embeddings miss.
+            List<Document> lexicalScope = !titleMatchedDocs.isEmpty() ? titleMatchedDocs : attachedDocs;
+            retrievedChunks = mergeWithLexicalMatches(
+                    retrievedChunks, userQuestion, lexicalScope, aiConfig.getTopK());
+
+            // If still nothing and we matched a title, fall back to representative chunks
+            if (retrievedChunks.isEmpty() && !titleMatchedDocs.isEmpty()) {
+                retrievedChunks = loadRepresentativeChunks(titleMatchedDocs, Math.max(aiConfig.getTopK() * 2, 8));
+                log.info("[chat] step=title-fallback conversationId={} chunks={}",
+                        conversationId, retrievedChunks.size());
+            }
+
+            // Overlapping / near-identical chunks confuse the model into citing [1],[2] twice.
+            retrievedChunks = dedupeNearDuplicateChunks(retrievedChunks);
         }
 
-        // 4. Enrich search results with chunk data from DB
-        List<PromptBuilder.RetrievedChunk> retrievedChunks = enrichSearchResults(searchResults);
+        // Hard guard: no grounded content → return deterministic message, never let the LLM invent.
+        if (retrievedChunks.isEmpty()) {
+            log.info("[chat] step=no-context conversationId={} — returning not-found without calling LLM",
+                    conversationId);
+            String notFound = attachedDocs.isEmpty()
+                    ? "Đoạn chat này chưa gắn tài liệu nào, nên mình chưa có nội dung để trả lời. "
+                            + "Bạn hãy gắn tài liệu vào chat rồi hỏi lại nhé."
+                    : "Xin lỗi, mình không tìm thấy nội dung phù hợp trong các tài liệu đã gắn để trả lời câu hỏi này.";
+            return buildErrorResponse(conversation, userMessage, notFound, aiConfig.getChatModel());
+        }
 
         // 5. Load conversation history (lấy trực tiếp theo thứ tự tăng dần, bỏ message
         // vừa lưu)
@@ -186,7 +276,7 @@ public class ChatService {
                 .findAllByConversation_IdOrderByCreatedAtAsc(conversationId);
         // Loại bỏ user message vừa lưu (tin nhắn cuối cùng)
         List<ChatMessage> history = allHistory.stream()
-                .filter(m -> !m.getId().equals(userMessage.getId()))
+                .filter(m -> !m.getId().equals(savedUserMessageId))
                 .toList();
         // Giới hạn số tin nhắn lịch sử (conversationHistoryLimit * 2: user + assistant)
         int historyLimit = aiProperties.getConversationHistoryLimit() * 2;
@@ -194,27 +284,48 @@ public class ChatService {
             history = history.subList(history.size() - historyLimit, history.size());
         }
 
-        // 6. Build prompt
+        // 6. Build prompt (include attached doc titles so meta-questions stay accurate)
+        List<String> attachedTitles = resolveDocumentTitles(selectedDocIds);
         List<LlmMessage> llmMessages = promptBuilder.buildMessages(
                 retrievedChunks,
                 history,
                 userQuestion,
-                aiProperties.getConversationHistoryLimit());
+                aiProperties.getConversationHistoryLimit(),
+                attachedTitles);
 
         // 7. Call LLM
         LlmResponse llmResponse;
         try {
             llmResponse = llmService.generate(llmMessages);
         } catch (Exception e) {
-            log.error("LLM generation failed", e);
-            return buildErrorResponse(conversation, "Không thể tạo câu trả lời. Vui lòng thử lại.");
+            log.error(
+                    "[chat] step=llm.generate conversationId={} provider={} chatModel={} messageCount={} error={}",
+                    conversationId,
+                    aiConfig.getProvider(),
+                    aiConfig.getChatModel(),
+                    llmMessages.size(),
+                    e.getMessage(),
+                    e);
+            return buildErrorResponse(conversation, userMessage,
+                    "Không thể tạo câu trả lời. Vui lòng thử lại.",
+                    aiConfig.getChatModel());
         }
 
-        // 8. Save assistant message
+        // Consume credit since LLM generation succeeded!
+        creditService.consume(user, "CHAT_QUESTION");
+
+        // Keep only chunks the model actually cited ([n]); drop near-duplicates; remap answer.
+        String rawAnswer = llmResponse.getContent();
+        List<PromptBuilder.RetrievedChunk> citedBeforeDedupe = filterCitedChunks(rawAnswer, retrievedChunks);
+        List<PromptBuilder.RetrievedChunk> citedChunks = dedupeNearDuplicateChunks(citedBeforeDedupe);
+        rawAnswer = remapCitationIndicesInAnswer(rawAnswer, citedBeforeDedupe, citedChunks);
+
+        // 8. Save assistant message (append nguồn so FE luôn hiện tên file)
+        String answerContent = appendSourceFooter(rawAnswer, citedChunks);
         ChatMessage assistantMessage = ChatMessage.builder()
                 .conversation(conversation)
                 .role(MessageRole.ASSISTANT)
-                .content(llmResponse.getContent())
+                .content(answerContent)
                 .llmModel(llmResponse.getModel())
                 .promptTokens(llmResponse.getPromptTokens())
                 .completionTokens(llmResponse.getCompletionTokens())
@@ -222,18 +333,20 @@ public class ChatService {
                 .build();
         assistantMessage = messageRepository.save(assistantMessage);
 
-        // 9. Save citations
-        List<CitationResponse> citationResponses = saveCitations(assistantMessage, retrievedChunks);
+        // 9. Save citations (only cited chunks + highlight line for FE)
+        List<CitationResponse> citationResponses = saveCitations(
+                assistantMessage, citedChunks, userQuestion, answerContent);
 
         // 10. Update conversation
         conversation.setTotalMessages((int) messageRepository.countByConversation_Id(conversationId));
         conversationRepository.save(conversation);
 
-        log.info("RAG pipeline completed for conversation {}: {} chunks retrieved, {} tokens used",
-                conversationId, retrievedChunks.size(), llmResponse.getTotalTokens());
+        log.info("RAG pipeline completed for conversation {}: {} retrieved, {} cited, {} tokens used",
+                conversationId, retrievedChunks.size(), citedChunks.size(), llmResponse.getTotalTokens());
 
         return ChatAnswerResponse.builder()
-                .message(toMessageResponse(assistantMessage))
+                .userMessage(toMessageResponse(userMessage, List.of()))
+                .assistantMessage(toMessageResponse(assistantMessage, citationResponses))
                 .citations(citationResponses)
                 .build();
     }
@@ -249,32 +362,677 @@ public class ChatService {
 
     /**
      * Build vector search filter based on conversation's selected documents.
-     * Supports: single documentId, multiple documentIds, or subjectId.
+     * Priority: selected document IDs → subject → empty (no global scan).
      */
-    private Map<String, Object> buildSearchFilter(ChatConversation conversation) {
+    private Map<String, Object> buildSearchFilter(ChatConversation conversation, List<UUID> selectedDocIds) {
         Map<String, Object> filter = new LinkedHashMap<>();
 
-        // Filter by selected documents (takes priority)
-        if (conversation.getSelectedDocumentIdsJson() != null) {
-            try {
-                List<String> docIds = objectMapper.readValue(
-                        conversation.getSelectedDocumentIdsJson(),
-                        new TypeReference<List<String>>() {
-                        });
-                if (docIds.size() == 1) {
-                    filter.put("documentId", docIds.get(0));
-                } else if (docIds.size() > 1) {
-                    filter.put("documentIds", docIds);
-                }
-            } catch (Exception e) {
-                log.warn("Failed to parse selectedDocumentIdsJson", e);
+        if (selectedDocIds != null && !selectedDocIds.isEmpty()) {
+            if (selectedDocIds.size() == 1) {
+                filter.put("documentId", selectedDocIds.get(0).toString());
+            } else {
+                filter.put("documentIds", selectedDocIds.stream().map(UUID::toString).toList());
             }
-        } else if (conversation.getSubject() != null) {
-            // Fall back to subject-level filter
-            filter.put("subjectId", conversation.getSubject().getId().toString());
+            return filter;
         }
 
+        if (conversation.getSubject() != null) {
+            filter.put("subjectId", conversation.getSubject().getId().toString());
+            return filter;
+        }
+
+        // No docs attached and no subject: search nothing (never all documents).
+        filter.put("documentIds", List.of());
         return filter;
+    }
+
+    private List<Document> loadAttachedDocuments(List<UUID> documentIds) {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return List.of();
+        }
+        List<Document> docs = documentRepository.findAllById(documentIds);
+        Map<UUID, Document> byId = new HashMap<>();
+        for (Document doc : docs) {
+            byId.put(doc.getId(), doc);
+        }
+        List<Document> ordered = new ArrayList<>();
+        for (UUID id : documentIds) {
+            Document doc = byId.get(id);
+            if (doc != null) {
+                ordered.add(doc);
+            }
+        }
+        return ordered;
+    }
+
+    /**
+     * Match attached documents whose title appears in the user question
+     * (e.g. "Present Require tóm tắt"). Prefers longer title matches.
+     */
+    private List<Document> matchDocumentsByTitle(String question, List<Document> attachedDocs) {
+        if (question == null || question.isBlank() || attachedDocs == null || attachedDocs.isEmpty()) {
+            return List.of();
+        }
+        String normalizedQuestion = normalizeForMatch(question);
+        if (normalizedQuestion.isBlank()) {
+            return List.of();
+        }
+
+        List<Document> ranked = new ArrayList<>(attachedDocs);
+        ranked.sort(Comparator.comparingInt((Document d) -> normalizeForMatch(d.getTitle()).length()).reversed());
+
+        List<Document> matched = new ArrayList<>();
+        for (Document doc : ranked) {
+            String title = normalizeForMatch(doc.getTitle());
+            if (title.length() < 3) {
+                continue;
+            }
+            if (normalizedQuestion.contains(title) || fuzzyTitleMatch(normalizedQuestion, title)) {
+                matched.add(doc);
+            }
+        }
+        return matched;
+    }
+
+    private boolean fuzzyTitleMatch(String normalizedQuestion, String normalizedTitle) {
+        // Strip common prefixes like "[r]" so "[R] Present Require" still matches "present require"
+        String strippedTitle = normalizedTitle
+                .replaceAll("^\\[[^\\]]+]\\s*", "")
+                .trim();
+        if (strippedTitle.length() >= 3 && normalizedQuestion.contains(strippedTitle)) {
+            return true;
+        }
+
+        // Require most significant tokens (length >= 3) to appear in the question
+        String[] tokens = strippedTitle.split("\\s+");
+        int significant = 0;
+        int hits = 0;
+        for (String token : tokens) {
+            if (token.length() < 3) {
+                continue;
+            }
+            significant++;
+            if (normalizedQuestion.contains(token)) {
+                hits++;
+            }
+        }
+        return significant > 0 && hits == significant;
+    }
+
+    private boolean isSummaryIntent(String question) {
+        if (question == null || question.isBlank()) {
+            return false;
+        }
+        String q = normalizeForMatch(question);
+        return q.contains("tom tat")
+                || q.contains("summary")
+                || q.contains("summarize")
+                || q.contains("tong quan")
+                || q.contains("noi dung chinh")
+                || q.contains("gioi thieu")
+                || q.contains("overview");
+    }
+
+    /**
+     * Decide which docs to load for summary-style questions.
+     * - "Present Require tóm tắt" → that file only
+     * - "tóm tắt" / title-only mention → matched file, else all attached
+     */
+    private List<Document> resolveSummaryTargets(
+            String question,
+            List<Document> titleMatchedDocs,
+            List<Document> attachedDocs,
+            boolean summaryIntent) {
+        if (attachedDocs == null || attachedDocs.isEmpty()) {
+            return List.of();
+        }
+        String normalized = normalizeForMatch(question);
+        boolean titleOnly = !titleMatchedDocs.isEmpty() && looksLikeTitleOnlyQuestion(normalized);
+
+        if (!summaryIntent && !titleOnly) {
+            return List.of();
+        }
+        if (!titleMatchedDocs.isEmpty()) {
+            return titleMatchedDocs;
+        }
+        // Explicit summary with no title named → summarize all attached docs
+        return summaryIntent ? attachedDocs : List.of();
+    }
+
+    /**
+     * Short questions that mostly just name a document (e.g. "Present Require")
+     * are treated as summary/overview requests.
+     */
+    private boolean looksLikeTitleOnlyQuestion(String normalizedQuestion) {
+        String[] tokens = normalizedQuestion.split("\\s+");
+        return tokens.length > 0 && tokens.length <= 6
+                && !normalizedQuestion.contains("la gi")
+                && !normalizedQuestion.contains("nhu the nao")
+                && !normalizedQuestion.contains("bao nhieu")
+                && !normalizedQuestion.contains("o dau")
+                && !normalizedQuestion.contains("khi nao")
+                && !normalizedQuestion.contains("tai sao")
+                && !normalizedQuestion.contains("vi sao");
+    }
+
+    private String normalizeForMatch(String text) {
+        if (text == null) {
+            return "";
+        }
+        String normalized = java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFD)
+                .replaceAll("\\p{M}+", "")
+                .toLowerCase(Locale.ROOT)
+                .replace('_', ' ')
+                .replace('-', ' ');
+        normalized = normalized.replaceAll("[^a-z0-9\\s\\[\\]]", " ");
+        return normalized.trim().replaceAll("\\s+", " ");
+    }
+
+    /**
+     * Load evenly spaced chunks across matched documents (no embedding score).
+     * Used for summary / title-only questions where semantic similarity is weak.
+     */
+    private List<PromptBuilder.RetrievedChunk> loadRepresentativeChunks(List<Document> docs, int maxChunks) {
+        if (docs == null || docs.isEmpty() || maxChunks <= 0) {
+            return List.of();
+        }
+
+        int perDoc = Math.max(1, maxChunks / docs.size());
+        List<PromptBuilder.RetrievedChunk> result = new ArrayList<>();
+        int citationIndex = 1;
+
+        for (Document doc : docs) {
+            List<DocumentChunk> all = chunkRepository.findAllByDocument_IdOrderByChunkIndexAsc(doc.getId());
+            if (all.isEmpty()) {
+                log.warn("[chat] documentId={} title='{}' has no chunks — cannot summarize",
+                        doc.getId(), doc.getTitle());
+                continue;
+            }
+            List<DocumentChunk> sampled = sampleEvenly(all, perDoc);
+            for (DocumentChunk chunk : sampled) {
+                if (chunk.getContent() == null || chunk.getContent().isBlank()) {
+                    continue;
+                }
+                result.add(new PromptBuilder.RetrievedChunk(
+                        citationIndex++,
+                        chunk.getId().toString(),
+                        doc.getId().toString(),
+                        doc.getTitle(),
+                        chunk.getContent(),
+                        chunk.getPageStart(),
+                        chunk.getPageEnd(),
+                        1.0));
+            }
+        }
+        return result;
+    }
+
+    // Vietnamese stop-words that add noise to lexical matching
+    private static final Set<String> STOP_WORDS = Set.of(
+            "la", "gi", "cua", "trong", "file", "tai", "lieu", "cho", "va", "co",
+            "the", "nao", "bao", "nhieu", "khi", "o", "dau", "vi", "sao", "tai_sao",
+            "ban", "minh", "hay", "cac", "mot", "nhung", "voi", "de", "duoc", "thi",
+            "a", "an", "of", "in", "is", "are", "what", "when", "where", "how");
+
+    /**
+     * Merge semantic chunks with lexical keyword matches from the given docs.
+     * Ensures literal terms in the question (e.g. "duration") surface the right chunk
+     * even when cross-lingual embedding similarity is low. Deduped by chunkId, re-indexed.
+     */
+    private List<PromptBuilder.RetrievedChunk> mergeWithLexicalMatches(
+            List<PromptBuilder.RetrievedChunk> semanticChunks,
+            String question,
+            List<Document> scopeDocs,
+            int topK) {
+        List<String> keywords = extractKeywords(question);
+        List<PromptBuilder.RetrievedChunk> lexical = keywords.isEmpty()
+                ? List.of()
+                : lexicalSearch(keywords, scopeDocs, Math.max(topK, 5));
+
+        if (lexical.isEmpty()) {
+            return semanticChunks;
+        }
+
+        // Preserve semantic order first, then append new lexical hits.
+        LinkedHashMap<String, PromptBuilder.RetrievedChunk> byChunk = new LinkedHashMap<>();
+        for (PromptBuilder.RetrievedChunk c : semanticChunks) {
+            byChunk.put(c.chunkId(), c);
+        }
+        for (PromptBuilder.RetrievedChunk c : lexical) {
+            byChunk.putIfAbsent(c.chunkId(), c);
+        }
+
+        // Re-number citation indices sequentially.
+        List<PromptBuilder.RetrievedChunk> merged = new ArrayList<>();
+        int idx = 1;
+        for (PromptBuilder.RetrievedChunk c : byChunk.values()) {
+            merged.add(new PromptBuilder.RetrievedChunk(
+                    idx++, c.chunkId(), c.documentId(), c.documentTitle(),
+                    c.content(), c.pageStart(), c.pageEnd(), c.score()));
+            if (idx > Math.max(topK * 2, 8)) {
+                break;
+            }
+        }
+        return merged;
+    }
+
+    private List<String> extractKeywords(String question) {
+        String normalized = normalizeForMatch(question);
+        if (normalized.isBlank()) {
+            return List.of();
+        }
+        LinkedHashSet<String> keywords = new LinkedHashSet<>();
+        for (String token : normalized.split("\\s+")) {
+            if (token.length() >= 3 && !STOP_WORDS.contains(token)) {
+                keywords.add(token);
+            }
+        }
+        return new ArrayList<>(keywords);
+    }
+
+    /**
+     * Score chunks of the scoped documents by keyword occurrence and return the best ones.
+     */
+    private List<PromptBuilder.RetrievedChunk> lexicalSearch(
+            List<String> keywords, List<Document> scopeDocs, int limit) {
+        if (scopeDocs == null || scopeDocs.isEmpty()) {
+            return List.of();
+        }
+
+        record Scored(DocumentChunk chunk, Document doc, int score) {
+        }
+        List<Scored> scored = new ArrayList<>();
+
+        for (Document doc : scopeDocs) {
+            List<DocumentChunk> chunks = chunkRepository.findAllByDocument_IdOrderByChunkIndexAsc(doc.getId());
+            for (DocumentChunk chunk : chunks) {
+                if (chunk.getContent() == null || chunk.getContent().isBlank()) {
+                    continue;
+                }
+                String haystack = normalizeForMatch(chunk.getContent());
+                int score = 0;
+                for (String kw : keywords) {
+                    int from = 0;
+                    while ((from = haystack.indexOf(kw, from)) >= 0) {
+                        score++;
+                        from += kw.length();
+                    }
+                }
+                if (score > 0) {
+                    scored.add(new Scored(chunk, doc, score));
+                }
+            }
+        }
+
+        scored.sort(Comparator.comparingInt(Scored::score).reversed());
+
+        List<PromptBuilder.RetrievedChunk> result = new ArrayList<>();
+        int idx = 1;
+        for (Scored s : scored) {
+            result.add(new PromptBuilder.RetrievedChunk(
+                    idx++, s.chunk().getId().toString(), s.doc().getId().toString(),
+                    s.doc().getTitle(), s.chunk().getContent(),
+                    s.chunk().getPageStart(), s.chunk().getPageEnd(), null));
+            if (idx > limit) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    private List<DocumentChunk> sampleEvenly(List<DocumentChunk> chunks, int limit) {
+        if (chunks.size() <= limit) {
+            return chunks;
+        }
+        List<DocumentChunk> sampled = new ArrayList<>();
+        int n = chunks.size();
+        for (int i = 0; i < limit; i++) {
+            int idx = (int) Math.round(i * (n - 1) / (double) (limit - 1));
+            sampled.add(chunks.get(idx));
+        }
+        return sampled;
+    }
+
+    private List<String> resolveDocumentTitles(List<UUID> documentIds) {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return List.of();
+        }
+        List<Document> docs = documentRepository.findAllById(documentIds);
+        Map<UUID, String> titleById = new HashMap<>();
+        for (Document doc : docs) {
+            titleById.put(doc.getId(), doc.getTitle());
+        }
+        // Preserve conversation selection order
+        List<String> titles = new ArrayList<>();
+        for (UUID id : documentIds) {
+            String title = titleById.get(id);
+            if (title != null) {
+                titles.add(title);
+            }
+        }
+        return titles;
+    }
+
+    /**
+     * Ensure the answer always ends with a clear file-level source list.
+     * Skips appending if the model already wrote a "Nguồn:" section.
+     */
+    private String appendSourceFooter(String content, List<PromptBuilder.RetrievedChunk> chunks) {
+        if (chunks == null || chunks.isEmpty()) {
+            return content;
+        }
+        String body = content == null ? "" : content.trim();
+        if (body.toLowerCase(Locale.ROOT).contains("nguồn:")) {
+            return body;
+        }
+
+        StringBuilder sb = new StringBuilder(body);
+        sb.append("\n\n---\n**Nguồn:**\n");
+        for (PromptBuilder.RetrievedChunk chunk : chunks) {
+            sb.append("[").append(chunk.citationIndex()).append("] ");
+            if (chunk.documentTitle() != null && !chunk.documentTitle().isBlank()) {
+                sb.append(chunk.documentTitle());
+            } else {
+                sb.append("(không rõ tên file)");
+            }
+            if (chunk.pageStart() != null) {
+                sb.append(" (trang ").append(chunk.pageStart());
+                if (chunk.pageEnd() != null && !chunk.pageEnd().equals(chunk.pageStart())) {
+                    sb.append("-").append(chunk.pageEnd());
+                }
+                sb.append(")");
+            }
+            sb.append("\n");
+        }
+        return sb.toString().trim();
+    }
+
+    private static final Pattern CITATION_INDEX_PATTERN = Pattern.compile("\\[(\\d+)]");
+
+    /**
+     * Keep only chunks whose [n] appears in the answer. If the model forgot to cite,
+     * fall back to the top 1–2 chunks by retrieval score so the sidebar is not empty.
+     */
+    private List<PromptBuilder.RetrievedChunk> filterCitedChunks(
+            String answer, List<PromptBuilder.RetrievedChunk> retrievedChunks) {
+        if (retrievedChunks == null || retrievedChunks.isEmpty()) {
+            return List.of();
+        }
+
+        Set<Integer> citedIndices = parseCitationIndices(answer);
+        if (!citedIndices.isEmpty()) {
+            List<PromptBuilder.RetrievedChunk> filtered = retrievedChunks.stream()
+                    .filter(c -> citedIndices.contains(c.citationIndex()))
+                    .toList();
+            if (!filtered.isEmpty()) {
+                return filtered;
+            }
+        }
+
+        return retrievedChunks.stream()
+                .sorted(Comparator.comparingDouble(
+                        (PromptBuilder.RetrievedChunk c) -> c.score() != null ? c.score() : 0.0)
+                        .reversed())
+                .limit(2)
+                .sorted(Comparator.comparingInt(PromptBuilder.RetrievedChunk::citationIndex))
+                .toList();
+    }
+
+    /**
+     * Drop near-identical / heavily overlapping chunks (common with chunk overlap + hybrid retrieval)
+     * and re-number citation indices 1..n so the LLM/FE never see duplicate [1]/[2] of the same text.
+     */
+    private List<PromptBuilder.RetrievedChunk> dedupeNearDuplicateChunks(
+            List<PromptBuilder.RetrievedChunk> chunks) {
+        if (chunks == null || chunks.isEmpty()) {
+            return List.of();
+        }
+
+        List<PromptBuilder.RetrievedChunk> kept = new ArrayList<>();
+        for (PromptBuilder.RetrievedChunk candidate : chunks) {
+            int dupOf = -1;
+            for (int i = 0; i < kept.size(); i++) {
+                if (areNearDuplicateContents(kept.get(i).content(), candidate.content())) {
+                    dupOf = i;
+                    break;
+                }
+            }
+            if (dupOf < 0) {
+                kept.add(candidate);
+                continue;
+            }
+            // Prefer longer excerpt (less mid-chunk cut) then higher score.
+            if (preferChunk(candidate, kept.get(dupOf))) {
+                kept.set(dupOf, candidate);
+            }
+        }
+
+        List<PromptBuilder.RetrievedChunk> reindexed = new ArrayList<>(kept.size());
+        int idx = 1;
+        for (PromptBuilder.RetrievedChunk c : kept) {
+            reindexed.add(new PromptBuilder.RetrievedChunk(
+                    idx++,
+                    c.chunkId(),
+                    c.documentId(),
+                    c.documentTitle(),
+                    c.content(),
+                    c.pageStart(),
+                    c.pageEnd(),
+                    c.score()));
+        }
+        return reindexed;
+    }
+
+    private boolean preferChunk(PromptBuilder.RetrievedChunk a, PromptBuilder.RetrievedChunk b) {
+        int lenA = a.content() != null ? a.content().length() : 0;
+        int lenB = b.content() != null ? b.content().length() : 0;
+        if (lenA != lenB) {
+            return lenA > lenB;
+        }
+        double scoreA = a.score() != null ? a.score() : 0.0;
+        double scoreB = b.score() != null ? b.score() : 0.0;
+        return scoreA > scoreB;
+    }
+
+    /**
+     * True when two chunks largely share the same text (identical, prefix, or high overlap).
+     */
+    private boolean areNearDuplicateContents(String a, String b) {
+        String na = normalizeForMatch(a);
+        String nb = normalizeForMatch(b);
+        if (na.isEmpty() || nb.isEmpty()) {
+            return false;
+        }
+        if (na.equals(nb)) {
+            return true;
+        }
+
+        String shorter = na.length() <= nb.length() ? na : nb;
+        String longer = na.length() <= nb.length() ? nb : na;
+        int probeLen = Math.min(360, shorter.length());
+        if (probeLen < 80) {
+            return shorter.equals(longer);
+        }
+        String probe = shorter.substring(0, probeLen);
+        if (longer.contains(probe)) {
+            // Overlap ratio: shared probe is a large fraction of the shorter chunk.
+            return (double) probeLen / shorter.length() >= 0.45
+                    || (double) shorter.length() / longer.length() >= 0.75;
+        }
+
+        // Token Jaccard on a window — catches shifted overlap windows.
+        Set<String> ta = tokenSet(na, 80);
+        Set<String> tb = tokenSet(nb, 80);
+        if (ta.isEmpty() || tb.isEmpty()) {
+            return false;
+        }
+        int intersection = 0;
+        for (String t : ta) {
+            if (tb.contains(t)) {
+                intersection++;
+            }
+        }
+        int union = ta.size() + tb.size() - intersection;
+        return union > 0 && (double) intersection / union >= 0.82;
+    }
+
+    private Set<String> tokenSet(String normalized, int maxTokens) {
+        LinkedHashSet<String> tokens = new LinkedHashSet<>();
+        for (String t : normalized.split("\\s+")) {
+            if (t.length() >= 3 && !STOP_WORDS.contains(t)) {
+                tokens.add(t);
+                if (tokens.size() >= maxTokens) {
+                    break;
+                }
+            }
+        }
+        return tokens;
+    }
+
+    /**
+     * After the model cites duplicate indices, rewrite dropped [n] onto the kept index
+     * so the answer matches the deduped citation list.
+     */
+    private String remapCitationIndicesInAnswer(
+            String answer,
+            List<PromptBuilder.RetrievedChunk> beforeDedupe,
+            List<PromptBuilder.RetrievedChunk> afterDedupe) {
+        if (answer == null || beforeDedupe == null || afterDedupe == null
+                || beforeDedupe.size() <= afterDedupe.size()) {
+            return answer;
+        }
+
+        // Map each original chunkId → new citationIndex after dedupe (by content match).
+        Map<String, Integer> chunkIdToNewIndex = new HashMap<>();
+        for (PromptBuilder.RetrievedChunk kept : afterDedupe) {
+            if (kept.chunkId() != null) {
+                chunkIdToNewIndex.put(kept.chunkId(), kept.citationIndex());
+            }
+        }
+
+        Map<Integer, Integer> oldToNew = new HashMap<>();
+        for (PromptBuilder.RetrievedChunk original : beforeDedupe) {
+            Integer mapped = chunkIdToNewIndex.get(original.chunkId());
+            if (mapped != null) {
+                oldToNew.put(original.citationIndex(), mapped);
+                continue;
+            }
+            // Dropped as duplicate of some kept chunk — find which.
+            for (PromptBuilder.RetrievedChunk kept : afterDedupe) {
+                if (areNearDuplicateContents(original.content(), kept.content())) {
+                    oldToNew.put(original.citationIndex(), kept.citationIndex());
+                    break;
+                }
+            }
+        }
+
+        if (oldToNew.isEmpty()) {
+            return answer;
+        }
+
+        Matcher matcher = CITATION_INDEX_PATTERN.matcher(answer);
+        StringBuffer sb = new StringBuffer();
+        while (matcher.find()) {
+            int oldIdx = Integer.parseInt(matcher.group(1));
+            Integer newIdx = oldToNew.get(oldIdx);
+            String replacement = newIdx != null ? "[" + newIdx + "]" : matcher.group();
+            matcher.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(sb);
+
+        // Collapse "[1], [1]" → "[1]"
+        return sb.toString().replaceAll("\\[(\\d+)](\\s*,\\s*\\[\\1])+", "[$1]");
+    }
+
+    private Set<Integer> parseCitationIndices(String answer) {
+        if (answer == null || answer.isBlank()) {
+            return Set.of();
+        }
+        LinkedHashSet<Integer> indices = new LinkedHashSet<>();
+        Matcher matcher = CITATION_INDEX_PATTERN.matcher(answer);
+        while (matcher.find()) {
+            try {
+                indices.add(Integer.parseInt(matcher.group(1)));
+            } catch (NumberFormatException ignored) {
+                // skip malformed
+            }
+        }
+        return indices;
+    }
+
+    /**
+     * Pick the line/sentence inside a chunk that best overlaps the question + answer
+     * (for FE bold/highlight on citation click).
+     */
+    private String extractHighlightText(String chunkContent, String question, String answer) {
+        if (chunkContent == null || chunkContent.isBlank()) {
+            return null;
+        }
+
+        List<String> candidates = splitHighlightCandidates(chunkContent);
+        if (candidates.isEmpty()) {
+            return truncate(chunkContent.trim(), 300);
+        }
+        if (candidates.size() == 1) {
+            return truncate(candidates.get(0), 300);
+        }
+
+        Set<String> keywords = new LinkedHashSet<>();
+        keywords.addAll(extractKeywords(question));
+        keywords.addAll(extractKeywords(stripSourceFooter(answer)));
+        if (keywords.isEmpty()) {
+            return truncate(candidates.get(0), 300);
+        }
+
+        String best = candidates.get(0);
+        int bestScore = -1;
+        for (String candidate : candidates) {
+            String haystack = normalizeForMatch(candidate);
+            if (haystack.isBlank()) {
+                continue;
+            }
+            int score = 0;
+            for (String kw : keywords) {
+                if (haystack.contains(kw)) {
+                    score += kw.length();
+                }
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+        return truncate(best, 300);
+    }
+
+    private List<String> splitHighlightCandidates(String content) {
+        List<String> result = new ArrayList<>();
+        for (String line : content.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            // Further split long lines on sentence boundaries.
+            String[] sentences = trimmed.split("(?<=[.!?])\\s+");
+            for (String sentence : sentences) {
+                String s = sentence.trim();
+                if (s.length() >= 8) {
+                    result.add(s);
+                }
+            }
+        }
+        return result;
+    }
+
+    private String stripSourceFooter(String answer) {
+        if (answer == null) {
+            return "";
+        }
+        int idx = answer.toLowerCase(Locale.ROOT).indexOf("nguồn:");
+        if (idx >= 0) {
+            return answer.substring(0, idx);
+        }
+        return answer;
     }
 
     /**
@@ -346,8 +1104,11 @@ public class ChatService {
     /**
      * Save citation records linking the assistant message to the source chunks.
      */
-    private List<CitationResponse> saveCitations(ChatMessage assistantMessage,
-            List<PromptBuilder.RetrievedChunk> retrievedChunks) {
+    private List<CitationResponse> saveCitations(
+            ChatMessage assistantMessage,
+            List<PromptBuilder.RetrievedChunk> retrievedChunks,
+            String question,
+            String answer) {
         List<CitationResponse> responses = new ArrayList<>();
 
         for (PromptBuilder.RetrievedChunk chunk : retrievedChunks) {
@@ -363,6 +1124,9 @@ public class ChatService {
                 }
 
                 if (docChunk != null && document != null) {
+                    String quoted = truncateAtWord(chunk.content(), 2500);
+                    String highlight = extractHighlightText(chunk.content(), question, answer);
+
                     MessageCitation citation = MessageCitation.builder()
                             .message(assistantMessage)
                             .chunk(docChunk)
@@ -371,21 +1135,12 @@ public class ChatService {
                             .score(chunk.score())
                             .pageStart(chunk.pageStart())
                             .pageEnd(chunk.pageEnd())
-                            .quotedText(truncate(chunk.content(), 500))
+                            .quotedText(quoted)
+                            .highlightText(highlight)
                             .build();
                     citation = citationRepository.save(citation);
 
-                    responses.add(CitationResponse.builder()
-                            .id(citation.getId())
-                            .citationIndex(chunk.citationIndex())
-                            .documentId(document.getId())
-                            .documentTitle(document.getTitle())
-                            .chunkId(docChunk.getId())
-                            .quotedText(citation.getQuotedText())
-                            .pageStart(chunk.pageStart())
-                            .pageEnd(chunk.pageEnd())
-                            .score(chunk.score())
-                            .build());
+                    responses.add(toCitationResponse(citation));
                 }
             } catch (Exception e) {
                 log.warn("Failed to save citation for chunk {}", chunk.chunkId(), e);
@@ -395,16 +1150,22 @@ public class ChatService {
         return responses;
     }
 
-    private ChatAnswerResponse buildErrorResponse(ChatConversation conversation, String errorMessage) {
+    private ChatAnswerResponse buildErrorResponse(
+            ChatConversation conversation,
+            ChatMessage userMessage,
+            String errorMessage,
+            String llmModel) {
         ChatMessage errorMsg = ChatMessage.builder()
                 .conversation(conversation)
                 .role(MessageRole.ASSISTANT)
                 .content(errorMessage)
+                .llmModel(llmModel)
                 .build();
         errorMsg = messageRepository.save(errorMsg);
 
         return ChatAnswerResponse.builder()
-                .message(toMessageResponse(errorMsg))
+                .userMessage(toMessageResponse(userMessage, List.of()))
+                .assistantMessage(toMessageResponse(errorMsg, List.of()))
                 .citations(List.of())
                 .build();
     }
@@ -417,6 +1178,7 @@ public class ChatService {
                 .title(conv.getTitle())
                 .subjectId(conv.getSubject() != null ? conv.getSubject().getId() : null)
                 .subjectName(conv.getSubject() != null ? conv.getSubject().getName() : null)
+                .documentIds(parseDocumentIds(conv.getSelectedDocumentIdsJson()))
                 .totalMessages(conv.getTotalMessages())
                 .active(conv.getActive())
                 .createdAt(conv.getCreatedAt())
@@ -424,7 +1186,73 @@ public class ChatService {
                 .build();
     }
 
-    private MessageResponse toMessageResponse(ChatMessage msg) {
+    private String serializeDocumentIds(List<UUID> documentIds) {
+        if (documentIds == null || documentIds.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(documentIds);
+        } catch (Exception e) {
+            throw new BadRequestException("Invalid document IDs");
+        }
+    }
+
+    private List<UUID> parseDocumentIds(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            List<String> raw = objectMapper.readValue(json, new TypeReference<List<String>>() {
+            });
+            List<UUID> ids = new ArrayList<>();
+            for (String id : raw) {
+                if (id == null || id.isBlank()) {
+                    continue;
+                }
+                ids.add(UUID.fromString(id));
+            }
+            return ids;
+        } catch (Exception e) {
+            log.warn("Failed to parse selectedDocumentIdsJson", e);
+            return List.of();
+        }
+    }
+
+    private Map<UUID, List<CitationResponse>> loadCitationsForMessages(List<UUID> messageIds) {
+        if (messageIds.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<UUID, List<CitationResponse>> citationsByMessageId = new LinkedHashMap<>();
+        for (MessageCitation citation : citationRepository.findAllByMessageIdInWithRelations(messageIds)) {
+            UUID messageId = citation.getMessage().getId();
+            citationsByMessageId
+                    .computeIfAbsent(messageId, ignored -> new ArrayList<>())
+                    .add(toCitationResponse(citation));
+        }
+        return citationsByMessageId;
+    }
+
+    private CitationResponse toCitationResponse(MessageCitation citation) {
+        return CitationResponse.builder()
+                .id(citation.getId())
+                .citationIndex(citation.getCitationIndex())
+                .documentId(citation.getDocument().getId())
+                .documentTitle(citation.getDocument().getTitle())
+                .chunkId(citation.getChunk().getId())
+                .quotedText(citation.getQuotedText())
+                .highlightText(citation.getHighlightText())
+                .pageStart(citation.getPageStart())
+                .pageEnd(citation.getPageEnd())
+                .score(citation.getScore())
+                .build();
+    }
+
+    private MessageResponse toMessageResponse(ChatMessage msg, List<CitationResponse> citations) {
+        List<CitationResponse> messageCitations = msg.getRole() == MessageRole.ASSISTANT
+                ? citations
+                : List.of();
+
         return MessageResponse.builder()
                 .id(msg.getId())
                 .role(msg.getRole().name())
@@ -434,12 +1262,35 @@ public class ChatService {
                 .completionTokens(msg.getCompletionTokens())
                 .totalTokens(msg.getTotalTokens())
                 .createdAt(msg.getCreatedAt())
+                .citations(messageCitations)
                 .build();
     }
 
     private String truncate(String text, int maxLength) {
-        if (text == null)
+        return truncateAtWord(text, maxLength);
+    }
+
+    /** Truncate without splitting mid-word; appends "..." when cut. */
+    private String truncateAtWord(String text, int maxLength) {
+        if (text == null) {
             return null;
-        return text.length() <= maxLength ? text : text.substring(0, maxLength) + "...";
+        }
+        if (text.length() <= maxLength) {
+            return text;
+        }
+        int end = maxLength;
+        while (end > maxLength / 2
+                && end > 0
+                && !Character.isWhitespace(text.charAt(end - 1))) {
+            end--;
+        }
+        if (end <= maxLength / 2) {
+            end = maxLength;
+            // Avoid splitting a surrogate pair.
+            if (end > 0 && end < text.length() && Character.isLowSurrogate(text.charAt(end))) {
+                end--;
+            }
+        }
+        return text.substring(0, end).trim() + "...";
     }
 }

@@ -337,6 +337,30 @@ public class DocumentService {
         return toResponse(findDocument(id));
     }
 
+    /**
+     * Enqueue a re-index job for every existing document so old documents are
+     * re-chunked with the current chunking logic. Each document is enqueued in its
+     * own transaction; the scheduler then processes them one by one.
+     *
+     * @return number of documents queued for re-indexing
+     */
+    public int reindexAll() {
+        List<UUID> documentIds = documentRepository.findAll().stream()
+                .map(Document::getId)
+                .toList();
+        int queued = 0;
+        for (UUID documentId : documentIds) {
+            try {
+                documentIndexJobService.enqueue(documentId);
+                queued++;
+            } catch (Exception ex) {
+                log.warn("[reindexAll] failed to enqueue documentId={} error={}", documentId, ex.getMessage());
+            }
+        }
+        log.info("[reindexAll] queued {} of {} documents for re-indexing", queued, documentIds.size());
+        return queued;
+    }
+
     public DocumentFileResource getViewContent(UUID documentId) {
         log.info("Loading view content documentId={}", documentId);
         Document document = refreshTotalPagesIfMissing(findDocument(documentId));

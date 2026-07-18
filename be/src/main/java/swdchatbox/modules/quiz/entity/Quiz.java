@@ -54,10 +54,43 @@ public class Quiz {
     @Column(nullable = false)
     private Boolean aiGenerated = false;
 
+    /** Xáo trộn thứ tự câu hỏi khi sinh đề. */
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean shuffleQuestions = false;
+
+    /** Xáo trộn thứ tự đáp án khi sinh đề. */
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean shuffleOptions = false;
+
+    /** Hiển thị điểm/kết quả cho sinh viên sau khi nộp (giống LMS). */
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean showScore = true;
+
+    /** Cho phép sinh viên làm lại sau khi đã nộp. */
+    @Column(nullable = false)
+    @Builder.Default
+    private Boolean allowRetake = false;
+
+    /** Số câu mỗi đề rút ra từ pool. Null = dùng toàn bộ pool. */
+    private Integer questionsPerVariant;
+
+    /** Số đề (variant) được sinh từ pool. Mặc định 1. */
+    @Column(nullable = false)
+    @Builder.Default
+    private Integer variantCount = 1;
+
     @OneToMany(mappedBy = "quiz", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("sortOrder ASC")
     @Builder.Default
     private List<QuizQuestion> questions = new ArrayList<>();
+
+    @OneToMany(mappedBy = "quiz", cascade = CascadeType.ALL, orphanRemoval = true)
+    @OrderBy("variantNumber ASC")
+    @Builder.Default
+    private List<QuizVariant> variants = new ArrayList<>();
 
     @CreationTimestamp
     @Column(updatable = false)
