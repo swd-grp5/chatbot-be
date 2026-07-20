@@ -1,6 +1,7 @@
 package swdchatbox.modules.document.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -9,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import swdchatbox.shared.exception.ResourceNotFoundException;
 import swdchatbox.modules.ai.service.EmbeddingService;
+import swdchatbox.modules.citation.repository.MessageCitationRepository;
 import swdchatbox.modules.document.entity.Document;
 import swdchatbox.modules.document.entity.DocumentChunk;
 import swdchatbox.modules.document.entity.DocumentIndexJob;
@@ -16,6 +18,7 @@ import swdchatbox.modules.document.entity.DocumentIndexJobStatus;
 import swdchatbox.modules.document.repository.DocumentChunkRepository;
 import swdchatbox.modules.document.repository.DocumentIndexJobRepository;
 import swdchatbox.modules.document.repository.DocumentRepository;
+import swdchatbox.modules.embedding.repository.EmbeddingRecordRepository;
 
 import java.util.List;
 import java.util.UUID;
@@ -34,6 +37,9 @@ public class DocumentIndexingService {
     private final DocumentIndexJobService documentIndexJobService;
     private final EmbeddingService embeddingService;
     private final ObjectMapper objectMapper;
+    private final MessageCitationRepository messageCitationRepository;
+    private final EmbeddingRecordRepository embeddingRecordRepository;
+    private final EntityManager entityManager;
 
     // Self reference so the @Transactional boundary on index() is honoured when
     // invoked from processPendingJobs() (a direct self-call would bypass the proxy).
@@ -58,7 +64,7 @@ public class DocumentIndexingService {
                 continue;
             }
             try {
-                self.index(job.getDocument().getId());
+                self.index(documentIndexJobService.requireDocumentId(job));
                 documentIndexJobService.markCompleted(job);
             } catch (Exception ex) {
                 documentIndexJobService.markRetry(job, ex);
@@ -75,8 +81,12 @@ public class DocumentIndexingService {
         String extractedText = documentExtractionService.extract(document);
         List<DocumentChunk> chunks = documentChunkingService.chunk(document, extractedText);
 
-        // 2. Save chunks to MySQL (clear old ones first)
+        // 2. Replace old chunks atomically (citations/embeddings first so FK delete succeeds)
+        messageCitationRepository.deleteAllByDocument_Id(documentId);
+        embeddingRecordRepository.deleteAllByChunk_Document_Id(documentId);
         documentChunkRepository.deleteAllByDocument_Id(documentId);
+        entityManager.flush();
+
         if (!chunks.isEmpty()) {
             documentChunkRepository.saveAll(chunks);
         }

@@ -46,12 +46,30 @@ public class EmbeddingService {
     }
 
     public List<List<Double>> embedBatch(List<String> texts) {
+        if (texts == null || texts.isEmpty()) {
+            return List.of();
+        }
         EffectiveAiConfig config = modelSettingService.resolveEffectiveConfig();
         requireApiKey(config);
-        if (config.isOpenAi()) {
-            return embedBatchWithOpenAI(texts, config.getEmbeddingModel(), config.getApiKey());
+
+        // Provider APIs cap batch size (Gemini batchEmbedContents ≈ 100). Chunk to avoid
+        // partial embedding sets that leave later document chunks unsearchable.
+        final int batchSize = 32;
+        List<List<Double>> all = new ArrayList<>(texts.size());
+        for (int from = 0; from < texts.size(); from += batchSize) {
+            int to = Math.min(from + batchSize, texts.size());
+            List<String> slice = texts.subList(from, to);
+            List<List<Double>> part = config.isOpenAi()
+                    ? embedBatchWithOpenAI(slice, config.getEmbeddingModel(), config.getApiKey())
+                    : embedBatchWithGemini(slice, config.getEmbeddingModel(), config.getApiKey());
+            if (part.size() != slice.size()) {
+                throw new BadRequestException(
+                        "Embedding batch returned " + part.size() + " vectors for " + slice.size()
+                                + " texts (offset " + from + ")");
+            }
+            all.addAll(part);
         }
-        return embedBatchWithGemini(texts, config.getEmbeddingModel(), config.getApiKey());
+        return all;
     }
 
     private List<Double> embedWithGemini(String text, String model, String apiKey) {

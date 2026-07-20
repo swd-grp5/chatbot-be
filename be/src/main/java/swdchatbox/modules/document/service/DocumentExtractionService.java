@@ -1,7 +1,11 @@
 package swdchatbox.modules.document.service;
 
-import org.apache.tika.Tika;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.tika.exception.TikaException;
+import org.apache.tika.metadata.Metadata;
+import org.apache.tika.parser.AutoDetectParser;
+import org.apache.tika.parser.ParseContext;
+import org.apache.tika.sax.BodyContentHandler;
 import org.springframework.stereotype.Service;
 import swdchatbox.shared.exception.BadRequestException;
 import swdchatbox.shared.exception.ResourceNotFoundException;
@@ -15,12 +19,19 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.StringJoiner;
 
+@Slf4j
 @Service
 public class DocumentExtractionService {
 
+    /**
+     * Tika's {@code parseToString} defaults to 100_000 chars and silently truncates —
+     * long PDFs (e.g. textbooks) only indexed ~1/3 of the content. Use -1 = no limit.
+     */
+    private static final int WRITE_LIMIT = -1;
+
     private final DocumentFileRepository documentFileRepository;
     private final DocumentStorageService documentStorageService;
-    private final Tika tika = new Tika();
+    private final AutoDetectParser parser = new AutoDetectParser();
 
     public DocumentExtractionService(
             DocumentFileRepository documentFileRepository,
@@ -40,7 +51,9 @@ public class DocumentExtractionService {
         for (DocumentFile file : files) {
             joiner.add(extractFile(document.getId(), file));
         }
-        return joiner.toString().trim();
+        String text = joiner.toString().trim();
+        log.info("[extract] documentId={} files={} chars={}", document.getId(), files.size(), text.length());
+        return text;
     }
 
     private String extractFile(java.util.UUID documentId, DocumentFile file) {
@@ -48,10 +61,13 @@ public class DocumentExtractionService {
             if (isPlainText(file.getMimeType(), file.getOriginalFileName())) {
                 return new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
             }
-            return tika.parseToString(inputStream);
+            Metadata metadata = new Metadata();
+            BodyContentHandler handler = new BodyContentHandler(WRITE_LIMIT);
+            parser.parse(inputStream, handler, metadata, new ParseContext());
+            return handler.toString();
         } catch (ResourceNotFoundException e) {
             return "";
-        } catch (IOException | TikaException e) {
+        } catch (IOException | TikaException | org.xml.sax.SAXException e) {
             throw new BadRequestException("Failed to extract text from file: " + file.getOriginalFileName());
         }
     }
