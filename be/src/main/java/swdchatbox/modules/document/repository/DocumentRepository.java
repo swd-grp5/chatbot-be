@@ -26,4 +26,6 @@ public interface DocumentRepository extends JpaRepository<Document, UUID>, JpaSp
 
     @Query("SELECT d.subject.id, COUNT(d) FROM Document d WHERE d.subject.id IN :subjectIds GROUP BY d.subject.id")
     List<Object[]> countBySubjectIds(@Param("subjectIds") Collection<UUID> subjectIds);
+
+    List<Document> findBySubject_IdAndStatusAndActiveTrue(UUID subjectId, DocumentStatus status);
 }
