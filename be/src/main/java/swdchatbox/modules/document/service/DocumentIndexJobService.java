@@ -1,9 +1,9 @@
 package swdchatbox.modules.document.service;
 
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import swdchatbox.shared.exception.BadRequestException;
 import swdchatbox.shared.exception.ResourceNotFoundException;
 import swdchatbox.modules.document.dto.response.DocumentIndexStatusResponse;
 import swdchatbox.modules.document.entity.Document;
@@ -18,6 +18,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class DocumentIndexJobService {
@@ -40,9 +41,16 @@ public class DocumentIndexJobService {
                         .maxRetries(DEFAULT_MAX_RETRIES)
                         .build());
 
+        // Allow re-queue of PROCESSING (e.g. stale claim after scheduler crash).
+        // Concurrent double-index is still prevented by claimForProcessing().
+        if (job.getStatus() == DocumentIndexJobStatus.PROCESSING) {
+            log.warn("Re-queueing PROCESSING index job for documentId={}", documentId);
+        }
+
         job.setStatus(DocumentIndexJobStatus.PENDING);
         job.setNextRunAt(LocalDateTime.now());
         job.setLastError(null);
+        job.setRetryCount(0);
         job = documentIndexJobRepository.save(job);
 
         document.setStatus(DocumentStatus.UPLOADED);
@@ -76,7 +84,7 @@ public class DocumentIndexJobService {
         }
         job.setStatus(DocumentIndexJobStatus.PROCESSING);
 
-        Document document = job.getDocument();
+        Document document = requireDocument(job);
         document.setStatus(DocumentStatus.PROCESSING);
         documentRepository.save(document);
         return true;
@@ -89,7 +97,7 @@ public class DocumentIndexJobService {
         job.setNextRunAt(null);
         documentIndexJobRepository.save(job);
 
-        Document document = job.getDocument();
+        Document document = requireDocument(job);
         document.setStatus(DocumentStatus.INDEXED);
         documentRepository.save(document);
     }
@@ -103,7 +111,7 @@ public class DocumentIndexJobService {
             job.setNextRunAt(null);
             documentIndexJobRepository.save(job);
 
-            Document document = job.getDocument();
+            Document document = requireDocument(job);
             document.setStatus(DocumentStatus.FAILED);
             documentRepository.save(document);
             return;
@@ -115,7 +123,7 @@ public class DocumentIndexJobService {
         job.setNextRunAt(LocalDateTime.now().plusSeconds(DEFAULT_RETRY_DELAY_SECONDS));
         documentIndexJobRepository.save(job);
 
-        Document document = job.getDocument();
+        Document document = requireDocument(job);
         document.setStatus(DocumentStatus.PROCESSING);
         documentRepository.save(document);
     }
@@ -124,5 +132,24 @@ public class DocumentIndexJobService {
     public void validateCanEnqueue(UUID documentId) {
         documentRepository.findById(documentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Document not found"));
+    }
+
+    /**
+     * Job entities come from a previous transaction; {@code job.document} is a lazy
+     * proxy and must not be touched for writes. Reload by FK id in the current session.
+     */
+    private Document requireDocument(DocumentIndexJob job) {
+        UUID documentId = requireDocumentId(job);
+        return documentRepository.findById(documentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Document not found"));
+    }
+
+    /** {@code getId()} on a Hibernate lazy proxy does not require an open session. */
+    public UUID requireDocumentId(DocumentIndexJob job) {
+        Document proxy = job.getDocument();
+        if (proxy == null || proxy.getId() == null) {
+            throw new ResourceNotFoundException("Document not found for index job");
+        }
+        return proxy.getId();
     }
 }

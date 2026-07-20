@@ -30,6 +30,7 @@ import swdchatbox.shared.exception.BadRequestException;
 import swdchatbox.shared.exception.ResourceNotFoundException;
 import swdchatbox.modules.document.entity.Document;
 import swdchatbox.modules.document.entity.DocumentChunk;
+import swdchatbox.modules.document.enums.DocumentStatus;
 import swdchatbox.modules.enrollment.service.SubjectEnrollmentService;
 import swdchatbox.modules.subject.entity.Subject;
 import swdchatbox.modules.document.repository.DocumentChunkRepository;
@@ -188,7 +189,11 @@ public class ChatService {
         // 3–4. Title-aware retrieval (+ summary fallback for vague questions)
         List<UUID> selectedDocIds = parseDocumentIds(conversation.getSelectedDocumentIdsJson());
         List<Document> attachedDocs = loadAttachedDocuments(selectedDocIds);
-        List<Document> titleMatchedDocs = matchDocumentsByTitle(userQuestion, attachedDocs);
+        // Subject-wide chat (no manual attach): scope = all INDEXED docs of the subject.
+        List<Document> scopeDocs = !attachedDocs.isEmpty()
+                ? attachedDocs
+                : loadSubjectIndexedDocuments(conversation.getSubject());
+        List<Document> titleMatchedDocs = matchDocumentsByTitle(userQuestion, scopeDocs);
         boolean summaryIntent = isSummaryIntent(userQuestion);
 
         List<UUID> retrievalDocIds = !titleMatchedDocs.isEmpty()
@@ -197,16 +202,17 @@ public class ChatService {
         Map<String, Object> filter = buildSearchFilter(conversation, retrievalDocIds);
 
         log.info(
-                "[chat] step=retrieve conversationId={} selectedDocIds={} titleMatched={} summaryIntent={} filter={}",
+                "[chat] step=retrieve conversationId={} selectedDocIds={} scopeDocs={} titleMatched={} summaryIntent={} filter={}",
                 conversationId,
                 selectedDocIds,
+                scopeDocs.stream().map(Document::getTitle).toList(),
                 titleMatchedDocs.stream().map(Document::getTitle).toList(),
                 summaryIntent,
                 filter);
 
         List<PromptBuilder.RetrievedChunk> retrievedChunks;
         List<Document> summaryTargets = resolveSummaryTargets(
-                userQuestion, titleMatchedDocs, attachedDocs, summaryIntent);
+                userQuestion, titleMatchedDocs, scopeDocs, summaryIntent);
         if (!summaryTargets.isEmpty()) {
             // Vague / title-only questions → load representative chunks (skip weak semantic match)
             retrievedChunks = dedupeNearDuplicateChunks(
@@ -218,10 +224,10 @@ public class ChatService {
         } else {
             List<VectorSearchResult> searchResults;
             try {
-                // When scoped to the user's attached docs we keep the top-K best chunks
-                // regardless of the default threshold — cross-lingual (VN query / EN doc)
-                // cosine scores are often below 0.5 yet still the right chunks.
-                boolean scoped = (retrievalDocIds != null && !retrievalDocIds.isEmpty());
+                // Doc-scoped OR subject-scoped: keep top-K regardless of default threshold —
+                // cross-lingual (VN query / EN doc) cosine scores are often below 0.5.
+                boolean scoped = (retrievalDocIds != null && !retrievalDocIds.isEmpty())
+                        || conversation.getSubject() != null;
                 double threshold = scoped ? 0.0 : aiProperties.getRetrievalScoreThreshold();
                 searchResults = vectorStoreService.search(
                         queryVector,
@@ -244,7 +250,7 @@ public class ChatService {
 
             // Hybrid: merge in lexical keyword matches so literal terms
             // ("duration", "deadline") are found even when embeddings miss.
-            List<Document> lexicalScope = !titleMatchedDocs.isEmpty() ? titleMatchedDocs : attachedDocs;
+            List<Document> lexicalScope = !titleMatchedDocs.isEmpty() ? titleMatchedDocs : scopeDocs;
             retrievedChunks = mergeWithLexicalMatches(
                     retrievedChunks, userQuestion, lexicalScope, aiConfig.getTopK());
 
@@ -263,10 +269,22 @@ public class ChatService {
         if (retrievedChunks.isEmpty()) {
             log.info("[chat] step=no-context conversationId={} — returning not-found without calling LLM",
                     conversationId);
-            String notFound = attachedDocs.isEmpty()
-                    ? "Đoạn chat này chưa gắn tài liệu nào, nên mình chưa có nội dung để trả lời. "
-                            + "Bạn hãy gắn tài liệu vào chat rồi hỏi lại nhé."
-                    : "Xin lỗi, mình không tìm thấy nội dung phù hợp trong các tài liệu đã gắn để trả lời câu hỏi này.";
+            String notFound;
+            if (!attachedDocs.isEmpty()) {
+                notFound = "Xin lỗi, mình không tìm thấy nội dung phù hợp trong các tài liệu đã gắn để trả lời câu hỏi này.";
+            } else if (conversation.getSubject() != null) {
+                if (scopeDocs.isEmpty()) {
+                    notFound = "Môn " + conversation.getSubject().getName()
+                            + " chưa có tài liệu đã index, nên mình chưa có nội dung để trả lời.";
+                } else {
+                    notFound = "Xin lỗi, mình không tìm thấy nội dung phù hợp trong tài liệu môn "
+                            + conversation.getSubject().getName()
+                            + " để trả lời câu hỏi này.";
+                }
+            } else {
+                notFound = "Đoạn chat này chưa gắn môn học hoặc tài liệu nào, nên mình chưa có nội dung để trả lời. "
+                        + "Bạn hãy chọn môn học rồi hỏi lại nhé.";
+            }
             return buildErrorResponse(conversation, userMessage, notFound, aiConfig.getChatModel());
         }
 
@@ -285,7 +303,9 @@ public class ChatService {
         }
 
         // 6. Build prompt (include attached doc titles so meta-questions stay accurate)
-        List<String> attachedTitles = resolveDocumentTitles(selectedDocIds);
+        List<String> attachedTitles = !selectedDocIds.isEmpty()
+                ? resolveDocumentTitles(selectedDocIds)
+                : scopeDocs.stream().map(Document::getTitle).filter(Objects::nonNull).toList();
         List<LlmMessage> llmMessages = promptBuilder.buildMessages(
                 retrievedChunks,
                 history,
@@ -403,6 +423,15 @@ public class ChatService {
             }
         }
         return ordered;
+    }
+
+    /** INDEXED + active documents belonging to a subject (subject-wide chat scope). */
+    private List<Document> loadSubjectIndexedDocuments(Subject subject) {
+        if (subject == null || subject.getId() == null) {
+            return List.of();
+        }
+        return documentRepository.findBySubject_IdAndStatusAndActiveTrue(
+                subject.getId(), DocumentStatus.INDEXED);
     }
 
     /**
