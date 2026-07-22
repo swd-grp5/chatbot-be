@@ -36,7 +36,8 @@ chatbot-be/
 | `MYSQL_DATABASE` | Không | Tên database |
 | `MYSQL_USER` | Không | User DB |
 | `SPRING_PORT` | Không (8080) | Cổng **host** map vào API |
-| `GOOGLE_CLIENT_ID`, `MAIL_*`, `CORS_*`, `APP_PUBLIC_URL` | Tùy tính năng | Xem `.env.example` |
+| `APP_ENCRYPTION_KEY` | Có (khi lưu API key) | Master key mã hóa API key trong DB |
+| `GOOGLE_CLIENT_ID`, `MAIL_*`, `CORS_*`, `APP_PUBLIC_URL`, `AI_*`, `GEMINI_*` | Tùy tính năng | Xem `.env.example` |
 
 Compose **không** dùng `env_file` (tránh lỗi Portainer thiếu `.env`).
 
@@ -61,12 +62,14 @@ MYSQL_DATABASE=swdchatbox
 MYSQL_USER=swd_user
 MYSQL_PASSWORD=...
 JWT_SECRET=...
+APP_ENCRYPTION_KEY=...
 SPRING_PORT=8080
 GOOGLE_CLIENT_ID=...
 CORS_ALLOWED_ORIGINS=http://168.144.98.120:5173,https://your-fe.com
 APP_PUBLIC_URL=http://168.144.98.120:8080
 VERIFY_BASE_URL=http://168.144.98.120:8080
 ```
+
 
 Redeploy stack (**bật build** — image không pull từ Docker Hub).
 
